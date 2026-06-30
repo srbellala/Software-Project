@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Relaxometry Lab</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div class="shell">
+
+  <!-- ── Navbar ─────────────────────────────────────────────────────────── -->
+  <nav class="navbar">
+    <span class="navbar-brand" onclick="App.goToLoad()" style="cursor:pointer;">Relaxometry Lab</span>
+    <div class="navbar-sep"></div>
+    <span style="font-size:11px;color:rgba(255,255,255,.5);margin-right:4px;">tool</span>
+    <button class="tool-btn active" id="tool-t2" onclick="App.setTool('T2')">T2</button>
+    <button class="tool-btn"        id="tool-t1" onclick="App.setTool('T1')">T1</button>
+    <button class="tool-btn disabled" title="Coming soon">T2*</button>
+  </nav>
+
+  <!-- ── Main scroll area ────────────────────────────────────────────────── -->
+  <div class="main-content">
+
+    <!-- Step wizard indicator -->
+    <div class="wizard-header" id="wizard-header">
+      <div class="step-item">
+        <div class="step-circle active" id="sc-1">1</div>
+        <span class="step-label active" id="sl-1">Load</span>
+      </div>
+      <div class="step-connector" id="conn-1"></div>
+      <div class="step-item">
+        <div class="step-circle" id="sc-2">2</div>
+        <span class="step-label" id="sl-2">Preview</span>
+      </div>
+      <div class="step-connector" id="conn-2"></div>
+      <div class="step-item">
+        <div class="step-circle" id="sc-3">3</div>
+        <span class="step-label" id="sl-3">Fit</span>
+      </div>
+      <div class="step-connector" id="conn-3"></div>
+      <div class="step-item">
+        <div class="step-circle" id="sc-4">4</div>
+        <span class="step-label" id="sl-4">Output</span>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         STEP 1 · Load
+    ══════════════════════════════════════════════════════════════════════ -->
+    <div id="step-load">
+      <div class="load-wrapper">
+
+        <!-- Modality selector -->
+        <div class="modality-toggle">
+          <button class="mod-btn active" id="mb-t2" onclick="App.setTool('T2')">T2 (multi-echo)</button>
+          <button class="mod-btn"        id="mb-t1" onclick="App.setTool('T1')">T1 (VFA)</button>
+        </div>
+
+        <div class="load-cols">
+
+          <!-- Left column: upload cards -->
+          <div class="load-left">
+
+            <!-- Scan upload -->
+            <div class="card">
+              <div class="card-title">Scan Data</div>
+              <div class="card-subtitle" id="scan-hint">
+                Upload a single 4D Enhanced DICOM (.dcm) — or a folder of per-echo NIfTI files
+              </div>
+
+              <div class="dropzone" id="dz-scan"
+                   ondragover="App.dzOver(event,'dz-scan')"
+                   ondragleave="App.dzLeave('dz-scan')"
+                   ondrop="App.dzDrop(event,'scan')"
+                   onclick="document.getElementById('inp-scan').click()">
+                <div class="dz-icon">📂</div>
+                <div class="dz-label">Drop files here or click to browse</div>
+                <div class="dz-hint">DICOM (.dcm) · NIfTI (.nii / .nii.gz)</div>
+              </div>
+              <input type="file" id="inp-scan" multiple accept=".dcm,.nii,.nii.gz"
+                     style="display:none" onchange="App.onScanFiles(event)" />
+
+              <div class="file-list" id="scan-file-list"></div>
+              <a class="load-demo-link" onclick="App.loadDemo()">↳ load sample dataset</a>
+            </div>
+
+            <!-- Segmentation upload -->
+            <div class="card">
+              <div class="card-title">Segmentation Mask <span style="font-weight:400;color:var(--muted)">(optional)</span></div>
+              <div class="card-subtitle">NIfTI binary mask aligned to scan space</div>
+
+              <div class="dropzone" id="dz-seg"
+                   ondragover="App.dzOver(event,'dz-seg')"
+                   ondragleave="App.dzLeave('dz-seg')"
+                   ondrop="App.dzDrop(event,'seg')"
+                   onclick="document.getElementById('inp-seg').click()">
+                <div class="dz-icon">🎭</div>
+                <div class="dz-label">Drop segmentation mask</div>
+                <div class="dz-hint">.nii / .nii.gz</div>
+              </div>
+              <input type="file" id="inp-seg" accept=".nii,.nii.gz"
+                     style="display:none" onchange="App.onSegFile(event)" />
+
+              <div class="file-list" id="seg-file-list"></div>
+            </div>
+
+          </div>
+
+          <!-- Right column: alignment check + proceed -->
+          <div class="load-right">
+            <div class="card">
+              <div class="card-title">Voxel-Space Alignment</div>
+              <div class="card-subtitle">Verifies scan ↔ mask geometry before fitting</div>
+              <div class="align-box" id="align-box">
+                Load a scan and segmentation mask to check alignment.
+              </div>
+              <div style="margin-top:auto; padding-top:16px;">
+                <button class="btn btn-primary" id="btn-next-preview"
+                        onclick="App.goToPreview()" disabled>
+                  Continue to Preview →
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /load-cols -->
+      </div><!-- /load-wrapper -->
+    </div><!-- /step-load -->
+
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         STEP 2 · Preview (ortho slicer — 3D Slicer style)
+    ══════════════════════════════════════════════════════════════════════ -->
+    <div id="step-preview">
+
+      <div class="card">
+        <div class="card-title">Ortho Preview</div>
+
+        <!-- Controls row -->
+        <div class="overlay-row" style="margin-bottom:14px;">
+          <input type="checkbox" id="seg-overlay-chk"
+                 onchange="App.ortho.toggleOverlay(this.checked)" />
+          <label for="seg-overlay-chk" style="font-size:12px;color:var(--muted);">Segmentation overlay</label>
+          <span style="color:var(--muted);font-size:11px;margin-left:10px;">opacity</span>
+          <input type="range" id="overlay-alpha" min="0" max="1" step="0.05" value="0.4"
+                 style="width:70px;accent-color:var(--navy);"
+                 oninput="App.ortho.setOverlayAlpha(this.value)" />
+
+          <label style="margin-left:16px;font-size:11px;color:var(--muted);" id="vol-label">TE</label>
+          <input type="range" id="vol-slider" min="0" max="0" value="0" step="1"
+                 style="width:90px;accent-color:var(--navy);"
+                 oninput="App.ortho.setVol(+this.value)" />
+          <span id="vol-val" style="font-size:11px;color:var(--navy);min-width:50px;"></span>
+        </div>
+
+        <!-- Three ortho canvases (3D Slicer style) -->
+        <div class="ortho-grid">
+
+          <!-- Axial — red -->
+          <div class="ortho-panel">
+            <div class="ortho-bar ortho-bar-axial">
+              <span>Axial</span>
+              <span class="ortho-pos" id="pos-axial"></span>
+            </div>
+            <div class="ortho-canvas-wrap" id="axial-wrap">
+              <canvas id="cv-axial"></canvas>
+            </div>
+            <div class="slice-row">
+              <label>Z</label>
+              <input type="range" id="sl-axial" min="0" max="0" value="0"
+                     oninput="App.ortho.setSlice('axial',+this.value)" />
+              <span class="slice-val" id="sv-axial">0</span>
+            </div>
+          </div>
+
+          <!-- Coronal — yellow -->
+          <div class="ortho-panel">
+            <div class="ortho-bar ortho-bar-coronal">
+              <span>Coronal</span>
+              <span class="ortho-pos" id="pos-coronal"></span>
+            </div>
+            <div class="ortho-canvas-wrap" id="coronal-wrap">
+              <canvas id="cv-coronal"></canvas>
+            </div>
+            <div class="slice-row">
+              <label>Y</label>
+              <input type="range" id="sl-coronal" min="0" max="0" value="0"
+                     oninput="App.ortho.setSlice('coronal',+this.value)" />
+              <span class="slice-val" id="sv-coronal">0</span>
+            </div>
+          </div>
+
+          <!-- Sagittal — green -->
+          <div class="ortho-panel">
+            <div class="ortho-bar ortho-bar-sagittal">
+              <span>Sagittal</span>
+              <span class="ortho-pos" id="pos-sagittal"></span>
+            </div>
+            <div class="ortho-canvas-wrap" id="sagittal-wrap">
+              <canvas id="cv-sagittal"></canvas>
+            </div>
+            <div class="slice-row">
+              <label>X</label>
+              <input type="range" id="sl-sagittal" min="0" max="0" value="0"
+                     oninput="App.ortho.setSlice('sagittal',+this.value)" />
+              <span class="slice-val" id="sv-sagittal">0</span>
+            </div>
+          </div>
+
+        </div><!-- /ortho-grid -->
+
+        <div style="display:flex; gap:10px; margin-top:12px;">
+          <button class="btn btn-ghost btn-sm" onclick="App.goToLoad()">← Back</button>
+          <button class="btn btn-primary btn-sm" onclick="App.goToFit()">Continue to Fit →</button>
+        </div>
+      </div>
+    </div><!-- /step-preview -->
+
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         STEP 3 · Fit — redesigned to match configure-fit layout
+    ══════════════════════════════════════════════════════════════════════ -->
+    <div id="step-fit">
+      <div class="card fit-card">
+
+        <!-- Header -->
+        <div class="fit-hdr">
+          <div>
+            <div class="fit-breadcrumb">relaxometry · fit</div>
+            <div class="fit-card-title">Configure the fit</div>
+          </div>
+          <span class="fit-model-tag" id="fit-model-tag">model: T2 mono-exponential</span>
+        </div>
+
+        <!-- Model equation chip -->
+        <div class="fit-eqn-row">
+          <div class="fit-eqn-model" id="model-name">T2 mono-exponential</div>
+          <div class="fit-eqn-chip" id="model-eqn">S(TE) = C + S₀ · e<sup>−TE·R2</sup></div>
+        </div>
+
+        <!-- Parameter table -->
+        <table class="param-table" id="param-table">
+          <thead>
+            <tr>
+              <th>PARAMETER</th>
+              <th>INIT</th>
+              <th>LOWER</th>
+              <th>UPPER</th>
+            </tr>
+          </thead>
+          <tbody id="param-tbody">
+            <!-- filled by JS -->
+          </tbody>
+        </table>
+
+        <!-- TR input (T1 only) -->
+        <div id="tr-row" class="hidden fit-tr-row">
+          <span style="font-size:12px;color:var(--muted);">TR</span>
+          <input type="number" id="tr-input" value="15" min="1" max="10000" step="1" class="pt-inp" />
+          <span style="font-size:11px;color:var(--muted);">ms</span>
+        </div>
+
+        <!-- Footer note -->
+        <p class="fit-note">
+          Voxels are fit inside the mask only; fits with R² below the threshold are discarded.
+          Derived rows (grey) are computed from their reciprocal.
+        </p>
+
+        <!-- Progress bar -->
+        <div class="progress-bar-wrap hidden" id="fit-progress-wrap">
+          <div class="progress-bar" id="fit-progress-bar"></div>
+        </div>
+        <div class="progress-label" id="fit-progress-label"></div>
+
+        <!-- Action buttons -->
+        <div class="fit-actions">
+          <button class="btn btn-ghost btn-sm" onclick="App.goToPreview()">← Back</button>
+          <button class="btn btn-primary" id="btn-run-fit" onclick="App.runFit()">Run fit →</button>
+        </div>
+
+      </div>
+    </div><!-- /step-fit -->
+
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         STEP 4 · Output — T2/T1 map overlaid on anatomy
+    ══════════════════════════════════════════════════════════════════════ -->
+    <div id="step-output">
+
+      <!-- Mode toggle -->
+      <div class="output-mode-row">
+        <button class="out-mode-btn active" id="mode-roi"
+                onclick="App.output.setMode('roi')">ROI Summary</button>
+        <button class="out-mode-btn" id="mode-voxel"
+                onclick="App.output.setMode('voxel')">Voxel Explorer</button>
+      </div>
+
+      <div class="output-layout">
+
+        <!-- ── Map panel (always col 1) ──────────────────────── -->
+        <div class="map-panel card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <div class="card-title" id="map-title">T2 Map</div>
+            <span id="voxel-map-hint" class="hidden"
+                  style="font-size:11px;color:var(--muted);font-style:italic;">
+              click map to select voxel
+            </span>
+          </div>
+
+          <div class="scrubber-row">
+            <label>Slice</label>
+            <input type="range" id="map-slice-slider" min="0" max="0" value="0"
+                   oninput="App.output.setSlice(+this.value)" />
+            <span class="scrubber-val" id="map-slice-val">0</span>
+          </div>
+
+          <div class="map-canvas-wrap">
+            <canvas id="cv-map" width="300" height="300"></canvas>
+          </div>
+
+          <div class="colorbar-row">
+            <span id="cb-min">0</span>
+            <canvas id="cv-colorbar" height="14"></canvas>
+            <span id="cb-max">0</span>
+            <span style="color:var(--muted);" id="cb-unit">ms</span>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+            <span style="font-size:11px;color:var(--muted);">Map opacity</span>
+            <input type="range" id="map-overlay-alpha" min="0.1" max="1" step="0.05" value="0.75"
+                   style="flex:1;accent-color:var(--navy);"
+                   oninput="App.output.setOverlayAlpha(+this.value)" />
+            <span id="map-overlay-val" style="font-size:11px;color:var(--navy);min-width:32px;">75%</span>
+          </div>
+
+          <!-- Map controls -->
+          <div class="map-controls">
+            <!-- Row 1: View + T2 range -->
+            <div class="map-ctrl-row">
+              <span class="ctrl-lbl">View</span>
+              <button class="ctrl-btn" onclick="App.output.rotateMap(-90)">↺ 90</button>
+              <button class="ctrl-btn" onclick="App.output.rotateMap(90)">90 ↻</button>
+              <button class="ctrl-btn" onclick="App.output.flipMap('h')">Flip H</button>
+              <button class="ctrl-btn" onclick="App.output.flipMap('v')">Flip V</button>
+              <button class="ctrl-btn" onclick="App.output.resetView()">Reset view</button>
+              <div class="ctrl-sep"></div>
+              <span class="ctrl-lbl">T2 min</span>
+              <input type="number" id="map-t2-min" class="ctrl-inp" oninput="App.output.setT2Range()" />
+              <span class="ctrl-lbl">T2 max</span>
+              <input type="number" id="map-t2-max" class="ctrl-inp" oninput="App.output.setT2Range()" />
+              <button class="ctrl-btn" onclick="App.output.resetT2Range()">Reset T2</button>
+              <label class="ctrl-check-lbl">
+                <input type="checkbox" id="map-ignore-thresh"
+                       onchange="App.output.setIgnoreThresh(this.checked)" />
+                Ignore T2 threshold
+              </label>
+            </div>
+            <!-- Row 2: Navigation -->
+            <div class="map-ctrl-row">
+              <span class="ctrl-lbl">Target T2</span>
+              <input type="number" id="map-target-t2" class="ctrl-inp" value="30" />
+              <button class="ctrl-btn" onclick="App.output.jumpToTargetT2()">Jump to closest T2</button>
+              <button class="ctrl-btn" onclick="App.output.jumpTo('global_median')">Global median</button>
+              <button class="ctrl-btn" onclick="App.output.jumpTo('slice_median')">Slice median</button>
+              <button class="ctrl-btn" onclick="App.output.jumpTo('highest_slice')">Highest in slice</button>
+              <button class="ctrl-btn" onclick="App.output.jumpTo('highest_global')">Highest global</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── ROI Summary: Decay + Histogram ──────────────────── -->
+        <div class="decay-panel card" id="out-roi-mid">
+          <div class="card-title" id="decay-title">Median Decay Curve</div>
+          <canvas id="cv-decay"></canvas>
+
+          <hr class="sep" />
+
+          <div class="card-title" style="margin-bottom:6px;">
+            <span id="hist-title">T2 Distribution</span>
+            <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:6px;">drag to zoom</span>
+          </div>
+          <canvas id="cv-hist"></canvas>
+        </div>
+
+        <!-- ── ROI Summary: Stats + Downloads ──────────────────── -->
+        <div class="stats-sidebar card" id="out-roi-right">
+          <div class="card-title" style="margin-bottom:10px;" id="stats-title">ROI Statistics</div>
+
+          <table class="stats-table" id="stats-table">
+            <tbody>
+              <tr><td>Median</td><td id="st-median">—</td></tr>
+              <tr><td>Mean</td>  <td id="st-mean">—</td></tr>
+              <tr><td>Std</td>   <td id="st-std">—</td></tr>
+              <tr><td>P25</td>   <td id="st-p25">—</td></tr>
+              <tr><td>P75</td>   <td id="st-p75">—</td></tr>
+              <tr><td>N vox</td> <td id="st-nvox">—</td></tr>
+            </tbody>
+          </table>
+
+          <hr class="sep" />
+
+          <div class="card-title" style="margin-bottom:10px;">Downloads</div>
+          <div class="download-row">
+            <button class="btn btn-primary btn-sm" onclick="App.download('map')">↓ Map (NIfTI)</button>
+            <button class="btn btn-ghost btn-sm"   onclick="App.download('stats')">↓ Stats (CSV)</button>
+            <button class="btn btn-ghost btn-sm"   onclick="App.download('report')">↓ Report (PDF)</button>
+          </div>
+
+          <hr class="sep" />
+          <button class="btn btn-ghost btn-sm" onclick="App.goToFit()"
+                  style="width:100%;justify-content:center;">← Refit</button>
+        </div>
+
+        <!-- ── Voxel Explorer: Signal + Residuals ──────────────── -->
+        <div class="vxsig-panel card hidden" id="out-voxel-mid">
+          <div class="card-title" id="voxel-plot-title" style="margin-bottom:8px;">
+            Voxel signal vs fit
+          </div>
+          <canvas id="cv-vxsig" class="vx-canvas"></canvas>
+          <hr class="sep" />
+          <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:.04em;">
+            RESIDUALS
+          </div>
+          <canvas id="cv-vxres" class="vx-canvas vx-canvas-sm"></canvas>
+        </div>
+
+        <!-- ── Voxel Explorer: Scatter + Voxel Info ────────────── -->
+        <div class="stats-sidebar card hidden" id="out-voxel-right">
+          <div class="card-title" id="scatter-title" style="margin-bottom:2px;">T2 Distribution</div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">click to select voxel</div>
+          <canvas id="cv-scatter" class="scatter-canvas"></canvas>
+
+          <hr class="sep" />
+
+          <div class="card-title" style="margin-bottom:8px;">Selected Voxel</div>
+          <table class="stats-table">
+            <tbody>
+              <tr><td>Position</td><td id="vx-pos">—</td></tr>
+              <tr><td id="vx-param-label">T2</td><td id="vx-t2">—</td></tr>
+              <tr><td>R² fit</td>  <td id="vx-r2fit">—</td></tr>
+              <tr><td>RMSE</td>    <td id="vx-rmse">—</td></tr>
+            </tbody>
+          </table>
+
+          <hr class="sep" />
+          <button class="btn btn-ghost btn-sm" onclick="App.goToFit()"
+                  style="width:100%;justify-content:center;">← Refit</button>
+        </div>
+
+      </div>
+    </div><!-- /step-output -->
+
+  </div><!-- /main-content -->
+</div><!-- /shell -->
+
+<!-- Toast container -->
+<div class="toast-area" id="toast-area"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
