@@ -528,21 +528,18 @@ html, body {
   border-radius: 4px;
 }
 
-.decay-panel { display: flex; flex-direction: column; gap: 8px; }
+.decay-panel { display: flex; flex-direction: column; gap: 8px; height: 100%; }
 #cv-decay {
   width: 100%;
-  height: 200px;
+  flex: 4 1 0;
+  min-height: 0;
   border-radius: 6px;
-  background: #fafaf8;
-  border: 1px solid var(--border);
 }
 #cv-hist {
   width: 100%;
-  height: 130px;
+  flex: 3 1 0;
+  min-height: 0;
   border-radius: 6px;
-  background: #fafaf8;
-  border: 1px solid var(--border);
-  cursor: ew-resize;
 }
 
 
@@ -625,22 +622,25 @@ html, body {
   padding: 0 2px;
 }
 .ctrl-btn {
-  padding: 3px 9px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: #f5f4f0;
-  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border: 1px solid var(--navy);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--navy);
   font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: background .12s, border-color .12s;
+  transition: background .15s;
 }
-.ctrl-btn:hover { background: var(--accent-lt); border-color: var(--accent); color: var(--navy); }
+.ctrl-btn:hover { background: var(--accent-lt); }
 .ctrl-inp {
   width: 54px;
-  padding: 3px 6px;
+  padding: 5px 8px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 8px;
   font-size: 11px;
   color: var(--text);
   background: #fff;
@@ -727,30 +727,21 @@ input[type=checkbox] { accent-color: var(--navy); }
   display: flex;
   flex-direction: column;
   gap: 6px;
+  height: 100%;
 }
 
-/* Let signal and residual canvases grow to fill the card */
 .vx-canvas {
   width: 100%;
-  flex: 3;          /* signal gets ~60% of remaining height */
-  min-height: 80px;
-  height: 0;        /* 0 + flex: 1 = fill available space */
+  flex: 10 1 0;
+  min-height: 0;
   border-radius: 6px;
-  background: #fafaf8;
-  border: 1px solid var(--border);
-  display: block;
 }
 .vx-canvas-sm {
-  flex: 2;          /* residuals get ~40% */
-  min-height: 60px;
+  flex: 7 1 0;
 }
 
 .scatter-canvas {
   width: 100%;
   height: 300px;
   border-radius: 6px;
-  background: #f5f4f0;
-  border: 1px solid var(--border);
-  cursor: crosshair;
-  display: block;
 }

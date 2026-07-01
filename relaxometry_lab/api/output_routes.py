@@ -99,6 +99,64 @@ async def download_stats(sid: str):
     )
 
 
+@router.get("/{sid}/voxels.npz")
+async def download_voxels(sid: str):
+    """
+    Numpy archive with all data needed for custom analysis. Load with np.load('file.npz').
+
+    Arrays included:
+      data         – raw signal (X, Y, Z, nVol)
+      TE           – echo times in ms (T2) or flip angles in deg (T1)
+      TR_ms        – repetition time in ms (scalar, T1 VFA only)
+      mask         – binary ROI mask (X, Y, Z), 1=ROI, 0=background
+      T2_ms/T1_ms  – fitted parameter map (X, Y, Z), NaN where not fitted
+      r2_fit       – fit R² quality map (X, Y, Z)
+      rmse         – fit RMSE map (X, Y, Z)
+      good_fit     – boolean quality-filter map (X, Y, Z), R² >= 0.5
+      affine       – 4x4 voxel-to-world affine matrix
+      modality     – 'T2' or 'T1' (scalar string)
+    """
+    s = _require_fit(sid)
+    label = "T2_ms" if s.modality == "T2" else "T1_ms"
+
+    arrays = {}
+
+    # Raw data
+    if s.stacked is not None:
+        arrays["data"] = s.stacked.astype(np.float32)
+
+    # Protocol
+    if s.acq_params is not None:
+        arrays["TE"] = s.acq_params.astype(np.float32)
+    if s.tr_ms is not None:
+        arrays["TR_ms"] = np.float32(s.tr_ms)
+
+    # Mask
+    arrays["mask"] = (s.seg > 0).astype(np.uint8) if s.seg is not None \
+                     else np.ones(s.param_map.shape, dtype=np.uint8)
+
+    # Fitted results (full 3-D maps — NaN where not fitted)
+    arrays[label]      = s.param_map.astype(np.float32)
+    arrays["r2_fit"]   = s.r2_map.astype(np.float32)   if s.r2_map   is not None else np.full(s.param_map.shape, np.nan, np.float32)
+    arrays["rmse"]     = s.rmse_map.astype(np.float32)  if s.rmse_map is not None else np.full(s.param_map.shape, np.nan, np.float32)
+    arrays["good_fit"] = np.isfinite(s.good_map).astype(np.uint8) if s.good_map is not None \
+                         else np.isfinite(s.param_map).astype(np.uint8)
+
+    # Geometry
+    if s.affine is not None:
+        arrays["affine"] = s.affine.astype(np.float64)
+    arrays["modality"] = np.bytes_(s.modality)
+
+    buf = io.BytesIO()
+    np.savez_compressed(buf, **arrays)
+    fname = f"{s.modality.lower()}_data.npz"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @router.get("/{sid}/report.pdf")
 async def download_report(sid: str):
     """

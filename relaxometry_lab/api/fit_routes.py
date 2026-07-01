@@ -340,11 +340,14 @@ async def fit_result(sid: str, slice_idx: int = -1, use_all: bool = False):
 
     # Median decay/VFA curve over ROI voxels (matches _draw_fit in explorer)
     decay_curve = []
+    decay_p25, decay_p75 = [], []
     if s.stacked is not None:
         roi_mask = (s.seg > 0) if s.seg is not None else np.isfinite(pm)
         roi_vox  = s.stacked[roi_mask, :]
         if roi_vox.size > 0:
             decay_curve = np.nanmedian(roi_vox, axis=0).tolist()
+            decay_p25   = np.nanpercentile(roi_vox, 25, axis=0).tolist()
+            decay_p75   = np.nanpercentile(roi_vox, 75, axis=0).tolist()
 
     vmin = float(np.nanpercentile(finite_vals, 2))  if len(finite_vals) else 0.0
     vmax = float(np.nanpercentile(finite_vals, 98)) if len(finite_vals) else 1.0
@@ -399,6 +402,8 @@ async def fit_result(sid: str, slice_idx: int = -1, use_all: bool = False):
         "hist_edges":  hist_edges,
         "acq_params":   s.acq_params.tolist(),
         "decay_curve":  decay_curve,
+        "decay_p25":    decay_p25,
+        "decay_p75":    decay_p75,
         "sigma_global": s.sigma_global,
         "anat_b64":     anat_b64,
         "orient":       orient,

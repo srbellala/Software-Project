@@ -2,6 +2,15 @@
 
 const API = "";   // same origin
 
+const PLOTLY_CFG = { displayModeBar: false, responsive: true };
+const PLOTLY_LAYOUT = {
+  paper_bgcolor: "#fafaf8",
+  plot_bgcolor:  "#fafaf8",
+  font: { family: "system-ui, sans-serif", size: 10, color: "#6b7e94" },
+  margin: { l: 46, r: 12, t: 10, b: 38 },
+  showlegend: false,
+};
+
 /* ────────────────────────────────────────────────────────── utils ─── */
 function toast(msg, type="info", ms=3500) {
   const el = document.createElement("div");
@@ -49,10 +58,55 @@ class OrthoViewer {
       sagittal: document.getElementById("cv-sagittal"),
     };
     this._ctx = {};
+    const _viewAxis = { axial: 0, coronal: 1, sagittal: 2 };
+    const _viewMax  = (k) => {
+      if (!this.shape) return 0;
+      return [this.shape[0]-1, this.shape[1]-1, this.shape[2]-1][_viewAxis[k]];
+    };
+    const _viewSlider = { axial: "sl-axial", coronal: "sl-coronal", sagittal: "sl-sagittal" };
+
+    this._viewZoom = { axial: 1, coronal: 1, sagittal: 1 };
+    this._viewPanX = { axial: 0, coronal: 0, sagittal: 0 };
+    this._viewPanY = { axial: 0, coronal: 0, sagittal: 0 };
+    this._viewDrag = null;
+
     for (const [k,c] of Object.entries(this._cvs)) {
       this._ctx[k] = c.getContext("2d");
       c.addEventListener("click", (e) => this._onClick(k, e));
+      c.addEventListener("mousedown", (e) => this._onViewMouseDown(k, e));
+      c.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) {
+          // Ctrl/Cmd+scroll: zoom toward cursor
+          const [dW, dH] = this._viewDims(k);
+          const rect  = c.getBoundingClientRect();
+          const fracX = (e.clientX - rect.left) / rect.width;
+          const fracY = (e.clientY - rect.top)  / rect.height;
+          const curZ  = this._viewZoom[k];
+          const newZ  = Math.max(1, Math.min(12, curZ * (e.deltaY < 0 ? 1.15 : 1/1.15)));
+          const srcW  = dW / curZ, srcH = dH / curZ;
+          const srcX  = Math.max(0, Math.min(dW - srcW, this._viewPanX[k]));
+          const srcY  = Math.max(0, Math.min(dH - srcH, this._viewPanY[k]));
+          const imgX  = srcX + fracX * srcW, imgY = srcY + fracY * srcH;
+          const nW = dW / newZ, nH = dH / newZ;
+          this._viewPanX[k] = Math.max(0, Math.min(dW - nW, imgX - fracX * nW));
+          this._viewPanY[k] = Math.max(0, Math.min(dH - nH, imgY - fracY * nH));
+          this._viewZoom[k] = newZ;
+          c.style.cursor = newZ > 1 ? "grab" : "default";
+          this._drawView(k);
+        } else {
+          // Regular scroll: change slice
+          const delta = e.deltaY > 0 ? 1 : -1;
+          const cur   = this.cpos[_viewAxis[k]];
+          const next  = Math.max(0, Math.min(_viewMax(k), cur + delta));
+          const sl    = document.getElementById(_viewSlider[k]);
+          if (sl) sl.value = next;
+          this.setSlice(k, next);
+        }
+      }, { passive: false });
     }
+    document.addEventListener("mousemove", (e) => this._onViewMouseMove(e));
+    document.addEventListener("mouseup",   ()  => this._onViewMouseUp());
     this._wmin = 0;
     this._wmax = 1;
   }
@@ -246,10 +300,14 @@ class OrthoViewer {
       }
     }
 
-    // Draw voxel-res image to temp canvas, then scale to display canvas
+    // Draw voxel-res image to temp canvas, then scale to display canvas (with zoom viewport)
     tCtx.putImageData(idata, 0, 0);
     ctx.clearRect(0, 0, bW, bH);
-    ctx.drawImage(tmp, 0, 0, bW, bH);
+    const zoom = this._viewZoom[view];
+    const vpW  = dW / zoom, vpH = dH / zoom;
+    const vpX  = Math.max(0, Math.min(dW - vpW, this._viewPanX[view]));
+    const vpY  = Math.max(0, Math.min(dH - vpH, this._viewPanY[view]));
+    ctx.drawImage(tmp, vpX, vpY, vpW, vpH, 0, 0, bW, bH);
 
     // Crosshairs — coloured per view to match 3D Slicer panel headers
     const XHAIR = {
@@ -257,16 +315,16 @@ class OrthoViewer {
       coronal:  "rgba(230,185,40,0.85)",
       sagittal: "rgba(60,190,90,0.85)",
     };
-    const sx = bW / dW;
-    const sy = bH / dH;
+    const sx = bW / vpW;
+    const sy = bH / vpH;
     let hLine, vLine;
     if (view === "axial")    { hLine = cy;        vLine = cx; }
     if (view === "coronal")  { hLine = dH-1-cz;   vLine = cx; }
     if (view === "sagittal") { hLine = dH-1-cz;   vLine = cy; }
     ctx.strokeStyle = XHAIR[view] || "rgba(200,200,200,0.8)";
     ctx.lineWidth   = ratio;
-    ctx.beginPath(); ctx.moveTo(0, (hLine+.5)*sy); ctx.lineTo(bW, (hLine+.5)*sy); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo((vLine+.5)*sx, 0); ctx.lineTo((vLine+.5)*sx, bH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, (hLine+.5-vpY)*sy); ctx.lineTo(bW, (hLine+.5-vpY)*sy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo((vLine+.5-vpX)*sx, 0); ctx.lineTo((vLine+.5-vpX)*sx, bH); ctx.stroke();
 
     // Orientation labels (standard radiological convention)
     const ORIENT = {
@@ -287,10 +345,10 @@ class OrthoViewer {
     ctx.textBaseline = "bottom"; ctx.fillText(ori.b, bW/2, bH - pad);
     ctx.shadowBlur = 0;
 
-    // Scale bar (bottom-right corner)
+    // Scale bar (bottom-right corner) — uses vpW so bar adapts correctly when zoomed
     const VOX_W = { axial: this._voxMm[2], coronal: this._voxMm[2], sagittal: this._voxMm[1] };
     const voxW = VOX_W[view] || 1;           // mm per voxel in image width direction
-    const pxPerMm = bW / (dW * voxW);
+    const pxPerMm = bW / (vpW * voxW);
     const targetMm = bW * 0.18 / pxPerMm;
     const niceMm = [2, 5, 10, 20, 50, 100].reduce((a, b) =>
       Math.abs(b - targetMm) < Math.abs(a - targetMm) ? b : a);
@@ -318,9 +376,16 @@ class OrthoViewer {
     if (!this.shape) return;
     const [Z, Y, X] = this.shape;
     const [dW, dH] = this._viewDims(view);
-    const rect = this._cvs[view].getBoundingClientRect();
-    const col  = Math.round((e.clientX - rect.left) / rect.width  * dW);
-    const row  = Math.round((e.clientY - rect.top)  / rect.height * dH);
+    const rect  = this._cvs[view].getBoundingClientRect();
+    const fracX = (e.clientX - rect.left) / rect.width;
+    const fracY = (e.clientY - rect.top)  / rect.height;
+    // Account for zoom/pan viewport
+    const zoom = this._viewZoom[view];
+    const vpW  = dW / zoom, vpH = dH / zoom;
+    const vpX  = Math.max(0, Math.min(dW - vpW, this._viewPanX[view]));
+    const vpY  = Math.max(0, Math.min(dH - vpH, this._viewPanY[view]));
+    const col  = Math.round(vpX + fracX * vpW);
+    const row  = Math.round(vpY + fracY * vpH);
 
     if (view === "axial")    { this.cpos[2] = col; this.cpos[1] = row; }
     if (view === "coronal")  { this.cpos[2] = col; this.cpos[0] = dH-1-row; }
@@ -340,32 +405,79 @@ class OrthoViewer {
 
     this.render();
   }
+
+  _onViewMouseDown(view, e) {
+    if (this._viewZoom[view] <= 1 || e.button !== 0) return;
+    this._viewDrag = {
+      view,
+      startX: e.clientX, startY: e.clientY,
+      startPanX: this._viewPanX[view], startPanY: this._viewPanY[view],
+    };
+    this._cvs[view].style.cursor = "grabbing";
+    e.preventDefault();
+  }
+
+  _onViewMouseMove(e) {
+    if (!this._viewDrag || !this.shape) return;
+    const { view } = this._viewDrag;
+    const [dW, dH] = this._viewDims(view);
+    const c    = this._cvs[view];
+    const rect = c.getBoundingClientRect();
+    const srcW = dW / this._viewZoom[view];
+    const srcH = dH / this._viewZoom[view];
+    const dxImg = -(e.clientX - this._viewDrag.startX) * srcW / rect.width;
+    const dyImg = -(e.clientY - this._viewDrag.startY) * srcH / rect.height;
+    this._viewPanX[view] = Math.max(0, Math.min(dW - srcW, this._viewDrag.startPanX + dxImg));
+    this._viewPanY[view] = Math.max(0, Math.min(dH - srcH, this._viewDrag.startPanY + dyImg));
+    this._drawView(view);
+  }
+
+  _onViewMouseUp() {
+    if (!this._viewDrag) return;
+    const v = this._viewDrag.view;
+    this._viewDrag = null;
+    this._cvs[v].style.cursor = this._viewZoom[v] > 1 ? "grab" : "default";
+  }
 }
 
 /* ────────────────────────────────────────────────────────── Output panel ─── */
 class OutputPanel {
   constructor() {
     this.result         = null;
-    this._histDrag      = { active: false, x0: 0, range0: null };
+
     this._vmin          = 0;
     this._vmax          = 1;
-    this._histRange     = null;
+
     this._overlayAlpha  = 0.75;
     this._mode          = "roi";
     this._voxelExplorer = null;
     this._useAll        = false;
     this._transform     = { rotation: 0, flipH: false, flipV: false };
 
-    document.getElementById("cv-hist").addEventListener("mousedown", (e) => this._histMD(e));
-    window.addEventListener("mousemove", (e) => this._histMM(e));
-    window.addEventListener("mouseup",   () => this._histMU());
+    // Zoom / pan state (zoom=1 = full view; >1 = zoomed in)
+    this._zoom      = 1.0;
+    this._panX      = 0;      // viewport origin in voxel-display space (x)
+    this._panY      = 0;      // viewport origin in voxel-display space (y)
+    this._viewport  = null;   // { srcX, srcY, srcW, srcH } — updated by _renderMap
+    this._dragState = null;
+
+    const cv = document.getElementById("cv-map");
+    cv.addEventListener("wheel", (e) => this._onMapWheel(e), { passive: false });
+    cv.addEventListener("mousedown", (e) => this._onMapMouseDown(e));
+    document.addEventListener("mousemove", (e) => this._onMapMouseMove(e));
+    document.addEventListener("mouseup",   (e) => this._onMapMouseUp(e));
   }
 
   load(result) {
     this.result = result;
     this._vmin = result.vmin;
     this._vmax = result.vmax;
-    this._histRange = [result.vmin, result.vmax];
+    this._zoom = 1;
+    this._panX = 0;
+    this._panY = 0;
+    const mapCv = document.getElementById("cv-map");
+    if (mapCv) mapCv.style.cursor = "default";
+
 
     // Title / stats
     const lbl = result.label;
@@ -442,6 +554,9 @@ class OutputPanel {
     const hint = document.getElementById("voxel-map-hint");
     if (hint) hint.classList.toggle("hidden", mode !== "voxel");
 
+    const mapCtrls = document.getElementById("map-controls");
+    if (mapCtrls) mapCtrls.classList.toggle("hidden", mode !== "voxel");
+
     if (mode === "voxel") {
       // Defer render until after CSS layout recalculates canvas sizes
       requestAnimationFrame(() => {
@@ -456,6 +571,14 @@ class OutputPanel {
           vx._renderSignalFit();
           vx._renderResiduals();
         }
+        // Charts may have first drawn while this panel was display:none
+        // (e.g. scatter is pre-fetched in the background during ROI mode);
+        // Plotly.react keeps stale dimensions in that case, so force a resize
+        // now that the container has its real, visible size.
+        ["cv-scatter", "cv-vxsig", "cv-vxres"].forEach(id => {
+          const el = document.getElementById(id);
+          if (el && el.data) Plotly.Plots.resize(el);
+        });
       });
     }
   }
@@ -478,10 +601,92 @@ class OutputPanel {
   }
   resetView() {
     this._transform = { rotation: 0, flipH: false, flipV: false };
+    this._zoom = 1;
+    this._panX = 0;
+    this._panY = 0;
+    const mapCv = document.getElementById("cv-map");
+    if (mapCv) mapCv.style.cursor = "default";
     if (this.result) {
       const sel = this._mode === "voxel" ? this._voxelExplorer?._selected : null;
       this._renderMap(this.result, sel);
     }
+  }
+
+  // ── Map wheel / drag interaction ─────────────────────────────────────────
+  _mapDispDims() {
+    if (!this.result) return [1, 1];
+    const { rotation: rot } = this._transform;
+    const [origRows, origCols] = this.result.shape;
+    return (rot === 90 || rot === 270) ? [origRows, origCols] : [origCols, origRows];
+  }
+
+  _onMapWheel(e) {
+    e.preventDefault();
+    if (!this.result) return;
+    const [dispCols, dispRows] = this._mapDispDims();
+    const cv   = document.getElementById("cv-map");
+    const rect = cv.getBoundingClientRect();
+    const fracX = (e.clientX - rect.left) / rect.width;
+    const fracY = (e.clientY - rect.top)  / rect.height;
+
+    if (e.ctrlKey || e.metaKey) {
+      // Zoom toward cursor
+      const factor  = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const newZoom = Math.max(1, Math.min(12, this._zoom * factor));
+      const srcW = dispCols / this._zoom;
+      const srcH = dispRows / this._zoom;
+      const srcX = Math.max(0, Math.min(dispCols - srcW, this._panX));
+      const srcY = Math.max(0, Math.min(dispRows - srcH, this._panY));
+      const imgX = srcX + fracX * srcW;
+      const imgY = srcY + fracY * srcH;
+      const nW = dispCols / newZoom, nH = dispRows / newZoom;
+      this._panX = Math.max(0, Math.min(dispCols - nW, imgX - fracX * nW));
+      this._panY = Math.max(0, Math.min(dispRows - nH, imgY - fracY * nH));
+      this._zoom = newZoom;
+      cv.style.cursor = newZoom > 1 ? "grab" : "default";
+    } else {
+      // Change slice
+      const sl  = document.getElementById("map-slice-slider");
+      const cur = parseInt(sl?.value) || 0;
+      const max = parseInt(sl?.max)   || 0;
+      const next = Math.max(0, Math.min(max, cur + (e.deltaY > 0 ? 1 : -1)));
+      if (sl) sl.value = next;
+      this.setSlice(next);
+      return;
+    }
+    const sel = this._mode === "voxel" ? this._voxelExplorer?._selected : null;
+    this._renderMap(this.result, sel);
+  }
+
+  _onMapMouseDown(e) {
+    if (this._zoom <= 1 || e.button !== 0) return;
+    this._dragState = {
+      startX: e.clientX, startY: e.clientY,
+      startPanX: this._panX, startPanY: this._panY,
+    };
+    document.getElementById("cv-map").style.cursor = "grabbing";
+    e.preventDefault();
+  }
+
+  _onMapMouseMove(e) {
+    if (!this._dragState || !this.result) return;
+    const [dispCols, dispRows] = this._mapDispDims();
+    const cv   = document.getElementById("cv-map");
+    const rect = cv.getBoundingClientRect();
+    const srcW = dispCols / this._zoom;
+    const srcH = dispRows / this._zoom;
+    const dxImg = -(e.clientX - this._dragState.startX) * srcW / rect.width;
+    const dyImg = -(e.clientY - this._dragState.startY) * srcH / rect.height;
+    this._panX = Math.max(0, Math.min(dispCols - srcW, this._dragState.startPanX + dxImg));
+    this._panY = Math.max(0, Math.min(dispRows - srcH, this._dragState.startPanY + dyImg));
+    const sel = this._mode === "voxel" ? this._voxelExplorer?._selected : null;
+    this._renderMap(this.result, sel);
+  }
+
+  _onMapMouseUp(_e) {
+    if (!this._dragState) return;
+    this._dragState = null;
+    document.getElementById("cv-map").style.cursor = this._zoom > 1 ? "grab" : "default";
   }
 
   // ── T2 range controls ────────────────────────────────────────────────────
@@ -615,7 +820,7 @@ class OutputPanel {
           px[dispIdx]=ag; px[dispIdx+1]=ag; px[dispIdx+2]=ag; px[dispIdx+3]=255;
         } else {
           const t = Math.max(0, Math.min(1, (v - vmin) / (vmax - vmin || 1)));
-          const [r,g,b] = _plasma(t);
+          const [r,g,b] = _parula(t);
           px[dispIdx]   = Math.round(ag * (1-alpha) + r * alpha);
           px[dispIdx+1] = Math.round(ag * (1-alpha) + g * alpha);
           px[dispIdx+2] = Math.round(ag * (1-alpha) + b * alpha);
@@ -637,16 +842,23 @@ class OutputPanel {
 
     const ctx  = cv.getContext("2d");
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(tmp, 0, 0, bW, bH);
 
-    // Scale factors: voxel coords → canvas (display) coords
-    const sx = bW / dispCols;
-    const sy = bH / dispRows;
+    // Apply zoom / pan viewport: draw only a sub-rect of the temp canvas
+    const vp_srcW = dispCols / this._zoom;
+    const vp_srcH = dispRows / this._zoom;
+    const vp_srcX = Math.max(0, Math.min(dispCols - vp_srcW, this._panX));
+    const vp_srcY = Math.max(0, Math.min(dispRows - vp_srcH, this._panY));
+    this._viewport = { srcX: vp_srcX, srcY: vp_srcY, srcW: vp_srcW, srcH: vp_srcH };
+    ctx.drawImage(tmp, vp_srcX, vp_srcY, vp_srcW, vp_srcH, 0, 0, bW, bH);
+
+    // Scale factors accounting for zoom: voxel-display coord → canvas pixel
+    const sx = bW / vp_srcW;
+    const sy = bH / vp_srcH;
 
     // ── Draw crosshair ────────────────────────────────────────────────────
     if (sel && Number.isFinite(sel.x) && Number.isFinite(sel.y)) {
       const [dc, dr] = this._origToDisplay(sel.x, sel.y, origCols, origRows);
-      const px_ = dc * sx, py_ = dr * sy;
+      const px_ = (dc - vp_srcX) * sx, py_ = (dr - vp_srcY) * sy;
       const arm  = 6 * dpr;
       ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 3 * dpr;
       ctx.beginPath(); ctx.moveTo(px_-arm, py_); ctx.lineTo(px_+arm, py_); ctx.stroke();
@@ -708,114 +920,63 @@ class OutputPanel {
     cv.width = W; cv.height = 14;
     const ctx = cv.getContext("2d");
     for (let x = 0; x < W; x++) {
-      const [r,g,b] = _plasma(x / W);
+      const [r,g,b] = _parula(x / W);
       ctx.fillStyle = `rgb(${r},${g},${b})`;
       ctx.fillRect(x, 0, 1, 14);
     }
   }
 
   _renderDecay(result) {
-    const cv = document.getElementById("cv-decay");
-    const W = cv.clientWidth || 300, H = cv.clientHeight || 200;
-    cv.width = W; cv.height = H;
-    const ctx = cv.getContext("2d");
-    ctx.clearRect(0, 0, W, H);
-
-    const acq    = result.acq_params  || [];
-    const curve  = result.decay_curve || [];
+    const acq   = result.acq_params  || [];
+    const curve = result.decay_curve || [];
     if (!acq.length || !curve.length) return;
+    const p25 = result.decay_p25 || [];
+    const p75 = result.decay_p75 || [];
+    const xlabel = result.label === "T2" ? "Echo Time (ms)" : "Flip Angle (°)";
 
-    const pad = {l:40, r:16, t:16, b:36};
-    const vmin = Math.min(...curve), vmax = Math.max(...curve);
-    const aMin = acq[0], aMax = acq[acq.length-1];
-
-    const toX = (a) => pad.l + (a - aMin) / (aMax - aMin || 1) * (W - pad.l - pad.r);
-    const toY = (v) => H - pad.b - (v - vmin) / (vmax - vmin || 1) * (H - pad.t - pad.b);
-
-    // Axes
-    ctx.strokeStyle = "#d0cfc8"; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H-pad.b);
-    ctx.lineTo(W-pad.r, H-pad.b);
-    ctx.stroke();
-
-    // Curve
-    ctx.strokeStyle = "#234a6e"; ctx.lineWidth = 2; ctx.beginPath();
-    acq.forEach((a, i) => {
-      if (i===0) ctx.moveTo(toX(a), toY(curve[i]));
-      else        ctx.lineTo(toX(a), toY(curve[i]));
-    });
-    ctx.stroke();
-
-    // Dots
-    acq.forEach((a, i) => {
-      ctx.beginPath();
-      ctx.arc(toX(a), toY(curve[i]), 4, 0, Math.PI*2);
-      ctx.fillStyle = "#4a90c4"; ctx.fill();
+    const traces = [];
+    if (p25.length === acq.length && p75.length === acq.length) {
+      traces.push(
+        { x: acq, y: p25, mode: "lines", line: { width: 0 },
+          hoverinfo: "skip", showlegend: false },
+        { x: acq, y: p75, mode: "lines", line: { width: 0 },
+          fill: "tonexty", fillcolor: "rgba(74,144,196,0.2)",
+          name: "IQR", hoverinfo: "skip" },
+      );
+    }
+    traces.push({
+      x: acq, y: curve,
+      mode: "lines+markers",
+      name: "Median",
+      line:   { color: "#234a6e", width: 2 },
+      marker: { color: "#4a90c4", size: 6 },
     });
 
-    // Labels
-    ctx.fillStyle = "#6b7e94"; ctx.font = "10px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(result.label === "T2" ? "Echo Time (ms)" : "Flip Angle (°)", W/2, H-4);
-    ctx.textAlign = "right";
-    ctx.fillText(vmax.toFixed(0), pad.l - 3, pad.t + 4);
-    ctx.fillText(vmin.toFixed(0), pad.l - 3, H - pad.b);
+    Plotly.react("cv-decay", traces, {
+      ...PLOTLY_LAYOUT,
+      xaxis: { title: { text: xlabel, standoff: 14 }, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+      yaxis: { title: { text: "Signal",standoff: 14 }, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+    }, PLOTLY_CFG);
   }
 
   _renderHist() {
     const result = this.result;
-    if (!result) return;
-    const cv = document.getElementById("cv-hist");
-    const W = cv.clientWidth || 300, H = cv.clientHeight || 130;
-    cv.width = W; cv.height = H;
-    const ctx = cv.getContext("2d");
-    ctx.clearRect(0, 0, W, H);
-
-    const counts = result.hist_counts || [];
-    const edges  = result.hist_edges  || [];
-    if (!counts.length) return;
-
-    const [lo, hi] = this._histRange || [edges[0], edges[edges.length-1]];
-    const iLo = edges.findIndex(e => e >= lo);
-    const iHi = edges.findIndex(e => e > hi);
-    const vis  = counts.slice(Math.max(0,iLo), iHi < 0 ? counts.length : iHi);
-    const cmax = Math.max(...vis, 1);
-
-    const pad = {l:8, r:8, t:8, b:22};
-    const nBins = vis.length;
-    const bw = (W - pad.l - pad.r) / (nBins || 1);
-
-    vis.forEach((c, i) => {
-      const h = (c / cmax) * (H - pad.t - pad.b);
-      const x = pad.l + i * bw;
-      const y = H - pad.b - h;
-      ctx.fillStyle = "#234a6e";
-      ctx.fillRect(x, y, Math.max(1, bw - 1), h);
-    });
-
-    // x labels
-    ctx.fillStyle = "#6b7e94"; ctx.font = "9px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(lo.toFixed(0), pad.l, H - 4);
-    ctx.fillText(hi.toFixed(0), W - pad.r, H - 4);
-    ctx.fillText(`${result.label} (ms)`, W/2, H - 4);
+    if (!result?.hist_counts?.length) return;
+    const edges  = result.hist_edges;
+    const counts = result.hist_counts;
+    const mids   = edges.slice(0, -1).map((e, i) => (e + edges[i + 1]) / 2);
+    Plotly.react("cv-hist", [{
+      x: mids, y: counts,
+      type: "bar",
+      marker: { color: "#234a6e", opacity: 0.8 },
+      hovertemplate: "%{x:.1f} ms: %{y}<extra></extra>",
+    }], {
+      ...PLOTLY_LAYOUT,
+      bargap: 0.05,
+      xaxis: { title: { text: `${result.label} (ms)`, standoff: 14 }, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+      yaxis: { color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+    }, PLOTLY_CFG);
   }
-
-  _histMD(e) {
-    this._histDrag.active = true;
-    this._histDrag.x0 = e.clientX;
-    this._histDrag.range0 = [...(this._histRange || [this._vmin, this._vmax])];
-  }
-  _histMM(e) {
-    if (!this._histDrag.active || !this.result) return;
-    const cv = document.getElementById("cv-hist");
-    const W  = cv.clientWidth || 300;
-    const [lo0, hi0] = this._histDrag.range0;
-    const span = hi0 - lo0;
-    const dx = -(e.clientX - this._histDrag.x0) / W * span * 2;
-    this._histRange = [lo0 + dx, hi0 + dx];
-    this._renderHist();
-  }
-  _histMU() { this._histDrag.active = false; }
 }
 
 /* ────────────────────────────────────────────────── Voxel Explorer ─── */
@@ -826,10 +987,7 @@ class VoxelExplorer {
     this._scatter  = null;   // {voxels, median, n}
     this._selected = null;   // {x, y, z}
     this._voxelData= null;
-    this._scatterPts = [];   // [{cx, cy, vox}]
 
-    // Attach scatter click listener once
-    document.getElementById("cv-scatter").addEventListener("click", (e) => this._scatterClick(e));
     // Map click — active only in voxel mode
     document.getElementById("cv-map").addEventListener("click", (e) => this._mapClick(e));
   }
@@ -863,8 +1021,7 @@ class VoxelExplorer {
     const d = this._voxelData;
 
     // Update voxel info table
-    document.getElementById("voxel-plot-title").textContent =
-      `Voxel signal vs fit  [${x}, ${y}, ${z}]`;
+    document.getElementById("voxel-plot-title").textContent = "Voxel signal vs fit";
     const lblEl = document.getElementById("vx-param-label");
     if (lblEl) lblEl.textContent = d.modality === "T2" ? "T2 (ms)" : "T1 (ms)";
     document.getElementById("vx-pos").textContent    = `(${x}, ${y}, ${z})`;
@@ -872,11 +1029,9 @@ class VoxelExplorer {
     document.getElementById("vx-r2fit").textContent  = isFinite(d.r2_fit) ? d.r2_fit.toFixed(3) : "—";
     document.getElementById("vx-rmse").textContent   = isFinite(d.rmse) ? d.rmse.toFixed(1) : "—";
 
-    // Render charts — first pass fills immediately, rAF pass fixes sizes after flex reflow
     this._renderSignalFit();
     this._renderResiduals();
     this._renderScatter();
-    requestAnimationFrame(() => { this._renderSignalFit(); this._renderResiduals(); });
 
     // Update map crosshair — if different slice, fetch new slice first
     const currentZ = parseInt(document.getElementById("map-slice-slider").value) || 0;
@@ -904,260 +1059,150 @@ class VoxelExplorer {
     const rot = this._out._transform.rotation;
     const dispCols = (rot === 90 || rot === 270) ? origRows : origCols;
     const dispRows = (rot === 90 || rot === 270) ? origCols : origRows;
-    const dcx = Math.min(dispCols - 1, Math.max(0, Math.floor(fracX * dispCols)));
-    const dcy = Math.min(dispRows - 1, Math.max(0, Math.floor(fracY * dispRows)));
+    // Account for zoom/pan viewport: canvas fraction → voxel-display coordinate
+    const vp  = this._out._viewport;
+    const dcx = Math.min(dispCols - 1, Math.max(0, Math.floor(
+      vp ? vp.srcX + fracX * vp.srcW : fracX * dispCols
+    )));
+    const dcy = Math.min(dispRows - 1, Math.max(0, Math.floor(
+      vp ? vp.srcY + fracY * vp.srcH : fracY * dispRows
+    )));
     const [xi, yi] = this._out._displayToOrig(dcx, dcy, origCols, origRows);
     const z = parseInt(document.getElementById("map-slice-slider").value) || 0;
     this.selectVoxel(xi, yi, z);
   }
 
-  // ── Scatter canvas click → nearest voxel
-  _scatterClick(e) {
-    if (!this._scatterPts?.length) return;
-    const cv   = document.getElementById("cv-scatter");
-    const rect = cv.getBoundingClientRect();
-    const cx   = (e.clientX - rect.left) * (cv.width  / rect.width);
-    const cy   = (e.clientY - rect.top)  * (cv.height / rect.height);
-    let best = null, bestD = Infinity;
-    for (const pt of this._scatterPts) {
-      const d = Math.hypot(pt.cx - cx, pt.cy - cy);
-      if (d < bestD) { bestD = d; best = pt.vox; }
-    }
-    if (best && bestD < 20) this.selectVoxel(best.x, best.y, best.z);
-  }
-
   // ── Signal vs Fit chart
   _renderSignalFit() {
     const d = this._voxelData;
-    const cv = document.getElementById("cv-vxsig");
-    if (!d || !cv) return;
-    const W = cv.clientWidth || 340, H = cv.clientHeight || 200;
-    cv.width = W; cv.height = H;
-    const ctx = cv.getContext("2d");
-
+    if (!d) return;
     const acq = d.acq_params || [], sig = d.signal || [], fit = d.fitted || [];
-    if (!acq.length) { ctx.clearRect(0,0,W,H); return; }
-
-    const pad = { l:52, r:16, t:24, b:40 };
-    const allY = [...sig, ...(fit.length ? fit : [])].filter(isFinite);
-    const ymin = Math.min(...allY) * 0.92;
-    const ymax = Math.max(...allY) * 1.08;
-    const xmin = acq[0], xmax = acq[acq.length-1];
-    const toX  = (a) => pad.l + (a - xmin) / ((xmax - xmin) || 1) * (W - pad.l - pad.r);
-    const toY  = (v) => H - pad.b - (v - ymin) / ((ymax - ymin) || 1) * (H - pad.t - pad.b);
-
-    ctx.fillStyle = "#fafaf8"; ctx.fillRect(0, 0, W, H);
-
-    // Grid lines
-    const nGridY = 4;
-    ctx.strokeStyle = "#e8e6df"; ctx.lineWidth = 1;
-    for (let i = 1; i < nGridY; i++) {
-      const v = ymin + (ymax - ymin) * i / nGridY;
-      const y = toY(v);
-      ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
-    }
-
-    // Axes
-    ctx.strokeStyle = "#c8c5be"; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H - pad.b); ctx.lineTo(W - pad.r, H - pad.b);
-    ctx.stroke();
-
-    // Y axis ticks + labels
-    ctx.fillStyle = "#9aa"; ctx.font = "9px sans-serif"; ctx.textAlign = "right";
-    for (let i = 0; i <= nGridY; i++) {
-      const v = ymin + (ymax - ymin) * i / nGridY;
-      const y = toY(v);
-      ctx.fillText(v.toFixed(0), pad.l - 5, y + 3);
-    }
-
-    // Fitted curve (dense smooth line)
-    if (fit.length >= 2) {
-      ctx.strokeStyle = "#e8a020"; ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      acq.forEach((a, i) => {
-        if (i === 0) ctx.moveTo(toX(a), toY(fit[i]));
-        else         ctx.lineTo(toX(a), toY(fit[i]));
-      });
-      ctx.stroke();
-    }
-
-    // Measured dots
-    acq.forEach((a, i) => {
-      ctx.beginPath(); ctx.arc(toX(a), toY(sig[i]), 5, 0, Math.PI * 2);
-      ctx.fillStyle = "#3a80c4"; ctx.fill();
-      ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
-    });
-
-    // X axis tick labels
-    ctx.fillStyle = "#7b8ea6"; ctx.font = "9px sans-serif"; ctx.textAlign = "center";
-    acq.forEach(a => ctx.fillText(a.toFixed(0), toX(a), H - pad.b + 12));
-
-    // Axis labels
+    if (!acq.length) return;
     const xlabel = d.modality === "T2" ? "TE (ms)" : "Flip Angle (°)";
-    ctx.font = "10px sans-serif";
-    ctx.fillText(xlabel, W / 2, H - 6);
-    ctx.save(); ctx.translate(14, (H - pad.t - pad.b) / 2 + pad.t);
-    ctx.rotate(-Math.PI / 2); ctx.fillText("Signal", 0, 0); ctx.restore();
-
-    // Legend
-    ctx.font = "9px sans-serif"; ctx.textAlign = "left";
-    ctx.beginPath(); ctx.arc(pad.l + 12, pad.t + 8, 4, 0, Math.PI * 2);
-    ctx.fillStyle = "#3a80c4"; ctx.fill();
-    ctx.fillStyle = "#555"; ctx.fillText("Measured", pad.l + 20, pad.t + 12);
+    const traces = [
+      { x: acq, y: sig, mode: "markers", name: "Measured",
+        marker: { color: "#3a80c4", size: 8, line: { color: "#fff", width: 1.5 } },
+        hovertemplate: `%{x:.1f}: %{y:.0f}<extra>Measured</extra>` },
+    ];
     if (fit.length) {
-      ctx.strokeStyle = "#e8a020"; ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.moveTo(pad.l + 90, pad.t + 8); ctx.lineTo(pad.l + 108, pad.t + 8); ctx.stroke();
-      ctx.fillStyle = "#555"; ctx.fillText("Fitted", pad.l + 114, pad.t + 12);
+      traces.push({ x: acq, y: fit, mode: "lines", name: "Fitted",
+        line: { color: "#e8a020", width: 2.5 },
+        hovertemplate: `%{x:.1f}: %{y:.0f}<extra>Fitted</extra>` });
     }
+    Plotly.react("cv-vxsig", traces, {
+      ...PLOTLY_LAYOUT,
+      margin: { ...PLOTLY_LAYOUT.margin, l: 56, b: 50 },
+      showlegend: true,
+      legend: { x: 0.98, xanchor: "right", y: 0.98, bgcolor: "rgba(0,0,0,0)", font: { size: 9 } },
+      xaxis: { title: { text: xlabel, standoff: 14 }, automargin: true, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+      yaxis: { title: { text: "Signal", standoff: 14 }, automargin: true, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+    }, PLOTLY_CFG);
   }
 
-  // ── Residuals stem plot
+  // ── Residuals stem plot (null-separator trick)
   _renderResiduals() {
     const d = this._voxelData;
-    const cv = document.getElementById("cv-vxres");
-    if (!d || !cv) return;
-    const W = cv.clientWidth || 340, H = cv.clientHeight || 130;
-    cv.width = W; cv.height = H;
-    const ctx = cv.getContext("2d");
-
+    if (!d) return;
     const acq = d.acq_params || [], res = d.residuals || [];
-    if (!acq.length || !res.length) { ctx.clearRect(0,0,W,H); return; }
-
-    const pad  = { l:52, r:16, t:12, b:40 };
-    const yabs = Math.max(Math.abs(Math.min(...res)), Math.abs(Math.max(...res)), 1) * 1.25;
-    const xmin = acq[0], xmax = acq[acq.length-1];
-    const toX  = (a) => pad.l + (a - xmin) / ((xmax - xmin) || 1) * (W - pad.l - pad.r);
-    const toY  = (v) => (H - pad.b) - (v + yabs) / (2 * yabs) * (H - pad.t - pad.b);
-    const zero = toY(0);
-
-    ctx.fillStyle = "#fafaf8"; ctx.fillRect(0, 0, W, H);
-
-    // Axes + zero line
-    ctx.strokeStyle = "#c8c5be"; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H - pad.b); ctx.lineTo(W - pad.r, H - pad.b);
-    ctx.stroke();
-    ctx.strokeStyle = "#bbb"; ctx.setLineDash([3, 3]);
-    ctx.beginPath(); ctx.moveTo(pad.l, zero); ctx.lineTo(W - pad.r, zero); ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Stems
-    acq.forEach((a, i) => {
-      const x = toX(a), y = toY(res[i]);
-      ctx.strokeStyle = "rgba(190,50,50,0.8)"; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(x, zero); ctx.lineTo(x, y); ctx.stroke();
-      ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(190,50,50,0.85)"; ctx.fill();
-    });
-
-    // Y labels
-    ctx.fillStyle = "#9aa"; ctx.font = "9px sans-serif"; ctx.textAlign = "right";
-    ctx.fillText(yabs.toFixed(0),  pad.l - 5, pad.t + 8);
-    ctx.fillText("0",              pad.l - 5, zero + 3);
-    ctx.fillText((-yabs).toFixed(0), pad.l - 5, H - pad.b);
-
-    // X labels
-    ctx.fillStyle = "#7b8ea6"; ctx.font = "9px sans-serif"; ctx.textAlign = "center";
-    acq.forEach(a => ctx.fillText(a.toFixed(0), toX(a), H - pad.b + 12));
-    ctx.font = "10px sans-serif";
+    if (!acq.length || !res.length) return;
     const xlabel = d.modality === "T2" ? "TE (ms)" : "Flip Angle (°)";
-    ctx.fillText(xlabel, W / 2, H - 6);
-    ctx.save(); ctx.translate(14, (H - pad.t - pad.b) / 2 + pad.t);
-    ctx.rotate(-Math.PI / 2); ctx.fillText("Residual", 0, 0); ctx.restore();
+    // Build stem segments: for each point emit [x, x, x, null] and [0, val, null]
+    const stemX = [], stemY = [];
+    acq.forEach((a, i) => { stemX.push(a, a, null); stemY.push(0, res[i], null); });
+    Plotly.react("cv-vxres", [
+      { x: stemX, y: stemY, mode: "lines",
+        line: { color: "rgba(190,50,50,0.7)", width: 1.5 }, hoverinfo: "skip" },
+      { x: acq, y: res, mode: "markers",
+        marker: { color: "rgba(190,50,50,0.85)", size: 7 },
+        hovertemplate: `%{x:.1f}: %{y:.1f}<extra>Residual</extra>` },
+    ], {
+      ...PLOTLY_LAYOUT,
+      margin: { ...PLOTLY_LAYOUT.margin, l: 56, t: 6, b: 50 },
+      xaxis: { title: { text: xlabel, standoff: 14 }, automargin: true, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+      yaxis: { title: { text: "Residual", standoff: 14 }, automargin: true, color: "#6b7e94", gridcolor: "#e8e6e0",
+               zeroline: true, zerolinecolor: "#bbb", zerolinewidth: 1 },
+    }, PLOTLY_CFG);
   }
 
   // ── T2 scatter plot (all ROI voxels, x=index, y=T2)
   _renderScatter() {
     const data = this._scatter;
-    const cv   = document.getElementById("cv-scatter");
-    if (!data?.voxels?.length || !cv) return;
-    const W = cv.clientWidth || 300, H = cv.clientHeight || 300;
-    cv.width = W; cv.height = H;
-    const ctx = cv.getContext("2d");
-
+    if (!data?.voxels?.length) return;
     const voxels = data.voxels;
-    const n      = voxels.length;
-    const t2vals = voxels.map(v => v.t2);
-    const t2min  = Math.min(...t2vals);
-    const t2max  = Math.max(...t2vals);
+    const lbl = this._out.result?.label || "T2";
 
-    const pad  = { l:46, r:14, t:14, b:36 };
-    const toX  = (i) => pad.l + i / Math.max(n - 1, 1) * (W - pad.l - pad.r);
-    const toY  = (t) => H - pad.b - (t - t2min) / ((t2max - t2min) || 1) * (H - pad.t - pad.b);
-
-    // Build canvas coordinate map for click detection
-    this._scatterPts = voxels.map((v, i) => ({
-      cx: toX(i), cy: toY(v.t2), vox: v,
-    }));
-
-    ctx.fillStyle = "#f5f4f0"; ctx.fillRect(0, 0, W, H);
-
-    // Axes
-    ctx.strokeStyle = "#ccc"; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H - pad.b); ctx.lineTo(W - pad.r, H - pad.b);
-    ctx.stroke();
-
-    // Median line
-    if (data.median != null) {
-      const my = toY(data.median);
-      ctx.save(); ctx.strokeStyle = "rgba(70,130,90,0.5)"; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(pad.l, my); ctx.lineTo(W - pad.r, my); ctx.stroke();
-      ctx.restore();
-    }
-
-    // Find selected index
-    const selIdx = this._selected
-      ? voxels.findIndex(v => v.x === this._selected.x && v.y === this._selected.y && v.z === this._selected.z)
-      : -1;
-
-    // Draw unselected dots
-    voxels.forEach((v, i) => {
-      if (i === selIdx) return;
-      ctx.beginPath(); ctx.arc(this._scatterPts[i].cx, this._scatterPts[i].cy, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = (v.r2_fit ?? 1) >= 0.5 ? "rgba(35,74,110,0.65)" : "rgba(210,95,80,0.7)";
-      ctx.fill();
+    // Split into good-fit and poor-fit groups for coloring
+    const good = voxels.filter(v => (v.r2_fit ?? 1) >= 0.5);
+    const poor = voxels.filter(v => (v.r2_fit ?? 1) <  0.5);
+    const mkGood = (pts) => ({
+      x: pts.map((_, i) => voxels.indexOf(pts[i])),
+      y: pts.map(v => v.t2),
+      mode: "markers",
+      marker: { color: "rgba(35,74,110,0.65)", size: 4 },
+      customdata: pts,
+      hovertemplate: `%{y:.1f} ms<extra></extra>`,
     });
 
-    // Draw selected voxel on top
-    if (selIdx >= 0) {
-      const { cx, cy } = this._scatterPts[selIdx];
-      ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(210,40,40,0.15)"; ctx.fill();
-      ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-      ctx.strokeStyle = "rgba(210,40,40,0.9)"; ctx.lineWidth = 2; ctx.stroke();
-      ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(210,40,40,0.9)"; ctx.fill();
+    const traces = [
+      { ...mkGood(good), name: "Good fit" },
+      { ...mkGood(poor), name: "Poor fit", marker: { color: "rgba(210,95,80,0.7)", size: 4 } },
+    ];
+
+    // Highlight selected voxel
+    if (this._selected) {
+      const si = voxels.findIndex(v =>
+        v.x === this._selected.x && v.y === this._selected.y && v.z === this._selected.z);
+      if (si >= 0) {
+        traces.push({ x: [si], y: [voxels[si].t2], mode: "markers",
+          marker: { color: "rgba(210,40,40,0.9)", size: 10, symbol: "circle",
+                    line: { color: "#fff", width: 1.5 } },
+          hovertemplate: `%{y:.1f} ms<extra>Selected</extra>` });
+      }
     }
 
-    // Y axis labels
-    ctx.fillStyle = "#8a9baa"; ctx.font = "9px sans-serif"; ctx.textAlign = "right";
-    ctx.fillText(t2max.toFixed(0), pad.l - 4, pad.t + 6);
-    ctx.fillText(t2min.toFixed(0), pad.l - 4, H - pad.b);
+    const layout = {
+      ...PLOTLY_LAYOUT,
+      showlegend: false,
+      xaxis: { title: { text: "active voxels", standoff: 14 }, color: "#6b7e94",
+               gridcolor: "#e8e6e0", zeroline: false },
+      yaxis: { title: { text: `${lbl} (ms)`, standoff: 4 }, color: "#6b7e94",
+               gridcolor: "#e8e6e0", zeroline: false },
+    };
+
+    // Add median annotation
     if (data.median != null) {
-      ctx.fillStyle = "rgba(70,130,90,0.8)";
-      ctx.fillText(data.median.toFixed(0), pad.l - 4, toY(data.median) + 3);
+      layout.shapes = [{ type: "line", x0: 0, x1: 1, xref: "paper",
+        y0: data.median, y1: data.median, yref: "y",
+        line: { color: "rgba(70,130,90,0.6)", width: 1, dash: "dash" } }];
+      layout.annotations = [{ x: 1, xref: "paper", xanchor: "right",
+        y: data.median, yref: "y", yanchor: "bottom",
+        text: `median ${data.median.toFixed(0)}`,
+        showarrow: false, font: { size: 9, color: "rgba(70,130,90,0.9)" } }];
     }
 
-    // Axis labels
-    ctx.fillStyle = "#6b7e94"; ctx.font = "10px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText("active voxels", W / 2, H - 4);
-    ctx.fillStyle = "#8a9baa"; ctx.font = "9px sans-serif"; ctx.textAlign = "right";
-    ctx.fillText(`n=${n}`, W - pad.r, pad.t + 10);
-    ctx.save(); ctx.translate(13, (H - pad.t - pad.b) / 2 + pad.t);
-    ctx.rotate(-Math.PI / 2); ctx.font = "10px sans-serif"; ctx.textAlign = "center";
-    ctx.fillStyle = "#6b7e94"; ctx.fillText("T2 (ms)", 0, 0); ctx.restore();
+    const div = document.getElementById("cv-scatter");
+    Plotly.react("cv-scatter", traces, layout, PLOTLY_CFG);
+
+    // Wire up click → selectVoxel (attach once; always reads this._scatter for current data)
+    if (!div._plotlyClickBound) {
+      div._plotlyClickBound = true;
+      div.on("plotly_click", (evt) => {
+        const pt = evt.points?.[0];
+        if (!pt) return;
+        const vox = pt.customdata ?? this._scatter?.voxels?.[Math.round(pt.x)];
+        if (vox) this.selectVoxel(vox.x, vox.y, vox.z);
+      });
+    }
   }
 }
 
 
-/* ────────────────────────────────────────────────────── Plasma colormap ─── */
-// 10-stop approximation of matplotlib "plasma"
-function _plasma(t) {
+/* ────────────────────────────────────────────────────── Parula colormap ─── */
+// 8-stop approximation of MATLAB "parula"
+function _parula(t) {
   const stops = [
-    [13,8,135],[84,2,163],[139,10,165],[185,50,137],
-    [219,92,104],[244,136,73],[254,188,43],[240,249,33]
+    [53,42,135],[15,92,221],[0,144,218],[7,163,179],
+    [68,172,101],[157,184,55],[228,197,35],[254,232,37]
   ];
   const n = stops.length - 1;
   const i = Math.min(n-1, Math.floor(t * n));
@@ -1261,9 +1306,9 @@ const App = (function() {
 
     const isT2 = modality === "T2";
     const tag = document.getElementById("fit-model-tag");
-    if (tag) tag.textContent = `model: ${isT2 ? "T2 mono-exponential" : "T1 VFA"}`;
+    if (tag) tag.textContent = `Model: ${isT2 ? "T2 Mono-Exponential" : "T1 VFA"}`;
     document.getElementById("model-name").textContent =
-      isT2 ? "T2 mono-exponential" : "T1 VFA (Variable Flip Angle)";
+      isT2 ? "T2 Mono-Exponential" : "T1 VFA (Variable Flip Angle)";
     document.getElementById("model-eqn").innerHTML = isT2
       ? "S(TE) = C + S₀ · e<sup>−TE·R2</sup>"
       : "S(α) = S₀ · sin(α) · (1−E₁) / (1−cos(α)·E₁)";
@@ -1331,8 +1376,8 @@ const App = (function() {
     document.getElementById("mb-t2").classList.toggle("active",   mod==="T2");
     document.getElementById("mb-t1").classList.toggle("active",   mod==="T1");
     const hint = mod === "T2"
-      ? "Upload a single 4D Enhanced DICOM (.dcm) — or a folder of per-echo NIfTI files"
-      : "Upload NIfTI volumes for each flip angle (.nii / .nii.gz)";
+      ? "Upload a Single 4D Enhanced DICOM (.dcm) — or a Folder of Per-Echo NIfTI files"
+      : "Upload NIfTI volumes for each Flip Angle (.nii / .nii.gz)";
     document.getElementById("scan-hint").textContent = hint;
     _buildParamTable(mod);
   }
@@ -1384,15 +1429,15 @@ const App = (function() {
       if (!_sid) { toast("Upload scan first", "error"); return; }
       const fd = new FormData();
       fd.append("file", file);
-      toast("Uploading segmentation…");
+      toast("Uploading Segmentation");
       const r = await fetch(`${API}/api/load/${_sid}/segmentation`, { method:"POST", body:fd });
       if (!r.ok) { const d=await r.json(); throw new Error(d.detail||"Seg upload failed"); }
       const d = await r.json();
       document.getElementById("seg-file-list").innerHTML =
         `<div class="fl-item">🎭 ${d.filename} (labels: ${d.labels.join(", ")})</div>`;
-      toast("Segmentation loaded", "ok");
+      toast("Segmentation Loaded", "Ok");
       await _doCheck();
-    } catch(e) { toast(e.message, "error"); }
+    } catch(e) { toast(e.message, "Error"); }
   }
 
   async function _doCheck() {
@@ -1410,7 +1455,7 @@ const App = (function() {
   async function loadDemo() {
     try {
       await _ensureSession();
-      toast("Loading demo dataset…");
+      toast("Loading Demo Dataset");
       const r = await fetch(`${API}/api/load/${_sid}/demo?modality=${_modality}`, { method:"POST" });
       if (!r.ok) { const d=await r.json(); throw new Error(d.detail||"Demo failed"); }
       const d = await r.json();
@@ -1425,20 +1470,20 @@ const App = (function() {
       ortho.acqParams = d.acq_params;
       ortho.nVols = d.n_vols;
       document.getElementById("btn-next-preview").disabled = false;
-      toast("Demo dataset ready", "ok");
-    } catch(e) { toast(e.message, "error"); }
+      toast("Demo Dataset Ready ", "OK");
+    } catch(e) { toast(e.message, "Error"); }
   }
 
   /* ── Navigation ────────────────────────────────────────────────────── */
   async function goToPreview() {
-    if (!_sid || !_scanReady) { toast("Load a scan first", "error"); return; }
+    if (!_sid || !_scanReady) { toast("Load a Scan First", "Error"); return; }
     setStep(2);
     try {
       await ortho.load(_sid, ortho.nVols, ortho.acqParams,
-                       _modality === "T1" ? "flip angle" : "TE");
+                       _modality === "T1" ? "Flip Angle" : "TE");
     } catch(e) {
       console.error(e);
-      toast("Preview load error: " + e.message, "error");
+      toast("Preview Load Error: " + e.message, "Error");
     }
   }
 
@@ -1451,7 +1496,7 @@ const App = (function() {
 
   /* ── Fitting ───────────────────────────────────────────────────────── */
   async function runFit() {
-    if (!_sid) { toast("No session", "error"); return; }
+    if (!_sid) { toast("No Session", "Error"); return; }
     const params = _collectParams();
     const tr = _modality === "T1" ? parseFloat(document.getElementById("tr-input").value) : null;
 
@@ -1470,7 +1515,7 @@ const App = (function() {
       body: JSON.stringify(body),
     });
     if (!r.ok) {
-      toast("Fit start failed", "error");
+      toast("Fit Start Failed ", "Error");
       document.getElementById("btn-run-fit").disabled = false;
       return;
     }
@@ -1486,7 +1531,7 @@ const App = (function() {
         es.close();
         bar.style.width = "100%";
         label.textContent = "Complete!";
-        toast("Fitting complete", "ok");
+        toast("Fitting Complete", "ok");
         document.getElementById("btn-run-fit").disabled = false;
         setTimeout(() => goToOutput(), 600);
       } else if (msg.status === "error") {
@@ -1526,6 +1571,7 @@ const App = (function() {
       map:    `/api/output/${_sid}/map.nii.gz`,
       stats:  `/api/output/${_sid}/stats.csv`,
       report: `/api/output/${_sid}/report.pdf`,
+      voxels: `/api/output/${_sid}/voxels.npz`,
     };
     const a = document.createElement("a");
     a.href = urls[type];

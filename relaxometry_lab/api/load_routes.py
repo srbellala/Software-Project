@@ -85,10 +85,67 @@ def _extract_TE_from_stem(stem: str) -> Optional[float]:
     Falls back to None if no pattern matches.
     """
     import re
-    # Pattern: _TE_NNNms_ or _teNNNms or similar
     m = re.search(r'[_\-](?:TE|te|echo)[_\-]?(\d+(?:\.\d+)?)(?:ms|MS)?', stem)
     if m:
         return float(m.group(1))
+    return None
+
+
+def _read_sidecar_json(nii_path: str) -> Optional[dict]:
+    """Load the BIDS JSON sidecar (.json with same basename) for a NIfTI file."""
+    import json
+    p = Path(nii_path)
+    stem = p.name
+    for suffix in ('.nii.gz', '.nii'):
+        if stem.lower().endswith(suffix):
+            stem = stem[:-len(suffix)]
+            break
+    json_path = p.parent / (stem + '.json')
+    if not json_path.exists():
+        return None
+    try:
+        with open(json_path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _te_ms(raw) -> Optional[float]:
+    """Convert a raw EchoTime value to ms. BIDS stores seconds; values < 5 are assumed seconds."""
+    if raw is None or isinstance(raw, list):
+        return None
+    v = float(raw)
+    return v * 1000.0 if v < 5.0 else v
+
+
+def _extract_TE_from_sidecar(nii_path: str) -> Optional[float]:
+    """
+    Read a single EchoTime from the BIDS JSON sidecar alongside a NIfTI file.
+    Returns TE in milliseconds, or None if not found.
+    """
+    meta = _read_sidecar_json(nii_path)
+    if not meta:
+        return None
+    for key in ('EchoTime', 'echo_time', 'TE'):
+        v = _te_ms(meta.get(key))
+        if v is not None:
+            return v
+    return None
+
+
+def _extract_TEs_from_sidecar(nii_path: str, n_echoes: int) -> Optional[np.ndarray]:
+    """
+    Read an array of EchoTimes from the BIDS JSON sidecar for a 4D multi-echo NIfTI.
+    Returns a float64 array of TEs in ms if the array length matches n_echoes, else None.
+    """
+    meta = _read_sidecar_json(nii_path)
+    if not meta:
+        return None
+    for key in ('EchoTime', 'EchoTimes', 'echo_time', 'echo_times', 'TE', 'TEs'):
+        et = meta.get(key)
+        if isinstance(et, list) and len(et) == n_echoes:
+            arr = np.array(et, dtype=float)
+            return arr * 1000.0 if arr.max() < 5.0 else arr
     return None
 
 
@@ -96,46 +153,69 @@ def _load_nifti_folder(paths: List[str]) -> tuple[np.ndarray, np.ndarray, np.nda
     """
     Sort NIfTI files by trailing number, stack into (X,Y,Z,nVol).
 
-    Key behaviour for the F2L dataset:
-      - Files named *_TE_NNNms_* → TE extracted from filename
-      - 4D files with shape (X,Y,Z,2) → take channel 0 (magnitude)
-        because channel 1 is phase; averaging magnitude+phase is wrong
-      - 4D files with shape (X,Y,Z,N>2) → take mean (multiple averages)
-      - Matching t2_voxel_explorer.py for 3D files and TE defaults
+    TE extraction priority (highest first):
+      1. BIDS JSON sidecar  (<stem>.json, EchoTime field)
+      2. Filename stem       (*_TE_NNNms_* patterns)
+      3. Default TEs         (10, 20, 30 … ms)
+
+    Special cases:
+      - Single 4D file, shape (X,Y,Z,N>2): treated as N echoes; sidecar may
+        supply an EchoTime array or scalar; defaults are used if absent.
+      - 4D with N=2: magnitude+phase pair → take channel 0 (magnitude only).
     """
     import nibabel as nib
 
     paths = sorted(paths, key=_natural_echo_key)
+
+    # ── Single 4D NIfTI: treat 4th dim as echoes ─────────────────────────
+    if len(paths) == 1:
+        img = nib.load(paths[0])
+        d   = img.get_fdata(dtype=np.float32)
+        if d.ndim == 4 and d.shape[3] == 2:
+            # Magnitude + phase (Bruker/Paravision): take magnitude only
+            d = d[..., 0:1]
+        if d.ndim == 4 and d.shape[3] > 1:
+            n = d.shape[3]
+            # Prefer sidecar array (must match n_echoes exactly), then defaults
+            tes = _extract_TEs_from_sidecar(paths[0], n)
+            if tes is None:
+                tes = _default_TEs(n)
+            return d, img.affine, tes
+        # 3D single file (n_echoes=1)
+        te  = _extract_TE_from_sidecar(paths[0]) or _extract_TE_from_stem(Path(paths[0]).stem)
+        acq = np.array([te if te is not None else 10.0], dtype=float)
+        vol = d if d.ndim == 3 else d[..., 0]
+        return vol[..., np.newaxis], img.affine, acq
+
+    # ── Multiple files: one 3D volume per echo ────────────────────────────
     vols, affine = [], None
-    tes_from_name: List[Optional[float]] = []
+    tes_from_file: List[Optional[float]] = []
 
     for p in paths:
         img = nib.load(p)
         if affine is None:
             affine = img.affine
-        d = img.get_fdata()
+        d = img.get_fdata(dtype=np.float32)
         if d.ndim == 4:
             if d.shape[3] == 2:
-                # Two channels (magnitude + phase from Bruker/Paravision exports).
-                # Take the magnitude channel (index 0) — never average with phase.
-                d = d[..., 0]
+                d = d[..., 0]   # magnitude channel
             else:
-                # Multiple averages or repetitions → collapse by mean
                 d = d.mean(axis=3)
         elif d.ndim != 3:
             raise ValueError(f"{Path(p).name}: expected 3D or 4D, got {d.ndim}D.")
         vols.append(d)
-        tes_from_name.append(_extract_TE_from_stem(Path(p).stem))
+        # Prefer sidecar, then filename, then None (will trigger defaults below)
+        te = _extract_TE_from_sidecar(p) or _extract_TE_from_stem(Path(p).stem)
+        tes_from_file.append(te)
 
     shapes = {v.shape for v in vols}
     if len(shapes) != 1:
         raise ValueError(f"Echo volumes have different shapes: {shapes}")
 
-    stacked = np.stack(vols, axis=-1)       # (X, Y, Z, nVol)
+    stacked = np.stack(vols, axis=-1)   # (X, Y, Z, nVol)
 
-    # Use TEs extracted from filenames if ALL could be read; otherwise use defaults
-    if all(t is not None for t in tes_from_name):
-        acq = np.array(tes_from_name, dtype=float)
+    if all(t is not None for t in tes_from_file):
+        acq = np.array(tes_from_file, dtype=float)
     else:
         acq = _default_TEs(len(paths))
 
