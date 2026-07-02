@@ -83,6 +83,13 @@
                      style="display:none" onchange="App.onScanFiles(event)" />
 
               <div class="file-list" id="scan-file-list"></div>
+
+              <div class="dz-divider">— or —</div>
+              <button type="button" class="btn btn-ghost btn-sm bruker-upload-btn"
+                      onclick="document.getElementById('inp-bruker').click()">
+                Upload Bruker Study (ZIP)
+              </button>
+
               <a class="load-demo-link" onclick="App.loadDemo()">↳ Load Sample Dataset</a>
             </div>
 
@@ -458,6 +465,49 @@
 
 <!-- Toast container -->
 <div class="toast-area" id="toast-area"></div>
+
+<!-- ── Bruker Study Browser Modal ─────────────────────────────────────── -->
+<div id="bruker-modal" class="modal-backdrop hidden" onclick="App.closeBrukerModal(event)">
+  <div class="modal-card" onclick="event.stopPropagation()">
+
+    <div class="modal-hdr">
+      <span class="modal-title">Bruker Study Browser</span>
+      <button class="modal-close" onclick="App.closeBrukerModal()">×</button>
+    </div>
+
+    <div class="modal-filters" id="bruker-filters">
+      <button class="chip chip-active" id="bf-all"  onclick="App.filterBruker('all')">All</button>
+      <button class="chip"             id="bf-t2"   onclick="App.filterBruker('T2')">T2 Multi-Echo</button>
+      <button class="chip"             id="bf-t1"   onclick="App.filterBruker('T1')">T1</button>
+      <button class="chip"             id="bf-anat" onclick="App.filterBruker('anat')">Anat / Other</button>
+    </div>
+
+    <div class="modal-body">
+      <table class="bruker-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Title</th>
+            <th>Modality</th>
+            <th>Echoes&nbsp;/ TEs (ms)</th>
+            <th>Files</th>
+          </tr>
+        </thead>
+        <tbody id="bruker-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="modal-footer">
+      <span id="bruker-selection-hint" class="modal-hint">Click a row to select a scan</span>
+      <button class="btn btn-primary" id="bruker-use-btn" disabled
+              onclick="App.selectBrukerScan()">Use Selected Scan →</button>
+    </div>
+
+  </div>
+</div>
+
+<input type="file" id="inp-bruker" accept=".zip" style="display:none"
+       onchange="App.onBrukerZip(this.files[0])"/>
 
 <script src="/static/app.js"></script>
 </body>

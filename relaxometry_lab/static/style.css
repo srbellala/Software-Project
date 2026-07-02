@@ -745,3 +745,160 @@ input[type=checkbox] { accent-color: var(--navy); }
   height: 300px;
   border-radius: 6px;
 }
+
+/* ── Bruker upload button / divider ────────────────────────────────────────── */
+.dz-divider {
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+  margin: 4px 0 15px;
+}
+.bruker-upload-btn {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+/* ── Modal (Bruker study browser) ─────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(30,45,61,.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+.modal-backdrop.hidden { display: none; }
+
+.modal-card {
+  background: var(--card);
+  border-radius: 14px;
+  box-shadow: 0 8px 40px rgba(35,74,110,.22);
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 100%);
+  max-height: 80vh;
+  overflow: hidden;
+}
+
+.modal-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--navy);
+}
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+.modal-close:hover { color: var(--text); }
+
+.modal-filters {
+  display: flex;
+  gap: 6px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.chip {
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.chip:hover    { border-color: var(--navy); color: var(--navy); }
+.chip-active   { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+.modal-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 120px;
+  max-height: 55vh;
+  padding: 0;
+}
+
+/* Bruker scan table */
+.bruker-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.bruker-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  border-bottom: 2px solid var(--border);
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.bruker-table tbody tr {
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background .1s;
+}
+.bruker-table tbody tr:hover         { background: var(--accent-lt); }
+.bruker-table tbody tr.bt-selected   { background: #dbeeff; }
+.bruker-table tbody tr.bt-disabled   { opacity: .4; cursor: not-allowed; }
+.bruker-table tbody tr.bt-muted      { opacity: .55; }
+.bruker-table td {
+  padding: 9px 14px;
+  vertical-align: middle;
+  color: var(--text);
+}
+.bruker-table td:first-child { color: var(--muted); font-weight: 700; width: 40px; }
+
+.bt-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.bt-badge-t2   { background: #dbeeff; color: #1a5fa0; }
+.bt-badge-t1   { background: #fde8d0; color: #8a4000; }
+.bt-badge-anat { background: #e8e6e0; color: #5a6370; }
+.bt-badge-unk  { background: #f0f0f0; color: #888; }
+
+.bt-te-list {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal-hint {
+  font-size: 12px;
+  color: var(--muted);
+}

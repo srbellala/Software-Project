@@ -565,6 +565,331 @@ async def get_seg_volume(sid: str):
     )
 
 
+# ─────────────────────────────────────────────── Bruker study browser ────────
+
+def _read_bruker_text(path: str) -> str:
+    try:
+        with open(path, "r", errors="ignore") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _bruker_param(text: str, key: str) -> list:
+    """Extract a JCAMP-DX parameter value as a list of string tokens."""
+    import re as _re
+    m = _re.search(rf"^##\$\s*{_re.escape(key)}\s*=(.*)$", text, _re.MULTILINE)
+    if not m:
+        return []
+    rhs = m.group(1).strip()
+    if rhs.startswith("<") and rhs.endswith(">"):
+        return [rhs[1:-1]]
+    if rhs.startswith("("):
+        tail = text[m.end():]
+        tokens = []
+        for line in tail.splitlines():
+            if line.startswith("##") or line.startswith("$$"):
+                break
+            tokens.extend(line.split())
+        return tokens
+    return rhs.split()
+
+
+def _bruker_floats(text: str, key: str) -> list:
+    out = []
+    for tok in _bruker_param(text, key):
+        try:
+            out.append(float(tok))
+        except ValueError:
+            pass
+    return out
+
+
+def _bruker_locate_exports(scan_dir: str) -> tuple:
+    """Return (dicom_files, nifti_files) found under pdata/<reco>/dicom|nifti/."""
+    dcm, nii = [], []
+    pdata = os.path.join(scan_dir, "pdata")
+    if not os.path.isdir(pdata):
+        return dcm, nii
+    for reco in sorted(os.listdir(pdata)):
+        rp = os.path.join(pdata, reco)
+        if not os.path.isdir(rp):
+            continue
+        dcm_dir = os.path.join(rp, "dicom")
+        nii_dir = os.path.join(rp, "nifti")
+        if os.path.isdir(dcm_dir):
+            dcm += [os.path.join(dcm_dir, f) for f in sorted(os.listdir(dcm_dir))
+                    if f.lower().endswith(".dcm")]
+        if os.path.isdir(nii_dir):
+            nii += [os.path.join(nii_dir, f) for f in sorted(os.listdir(nii_dir))
+                    if f.lower().endswith((".nii", ".nii.gz"))]
+    return dcm, nii
+
+
+def _bruker_scan_info(scan_dir: str) -> dict:
+    """Read Bruker method/acqp files + DICOM header to produce a scan metadata dict."""
+    text  = _read_bruker_text(os.path.join(scan_dir, "method"))
+    acqp  = _read_bruker_text(os.path.join(scan_dir, "acqp"))
+
+    # Sequence/method name — try method file first, fall back to acqp fields
+    method_toks = (
+        _bruker_param(text, "Method") or
+        _bruker_param(acqp, "ACQ_scan_name") or
+        _bruker_param(acqp, "ACQ_protocol_name") or
+        _bruker_param(text, "PVM_ScanMethod")
+    )
+    method_name = method_toks[0] if method_toks else "?"
+    mu = method_name.upper()
+
+    # Echo times: method file → acqp fallback
+    tes = (
+        _bruker_floats(text, "EffectiveTE") or
+        _bruker_floats(text, "PVM_EchoTime") or
+        _bruker_floats(acqp, "ACQ_echo_time")
+    )
+    unique_tes = sorted(set(round(t, 3) for t in tes))
+    n_echo     = len(unique_tes)
+
+    # Echo-count fallback when the TE array is absent
+    if n_echo == 0:
+        ne_raw = _bruker_floats(acqp, "NECHOES") or _bruker_floats(text, "PVM_NEchoImages")
+        if ne_raw:
+            n_echo = max(int(ne_raw[0]), 0)
+
+    flip = _bruker_floats(text, "PVM_ExcPulseAngle") or _bruker_floats(text, "ExcPulse1")
+    tr   = _bruker_floats(text, "PVM_RepetitionTime")
+
+    # Modality detection (method name takes priority, then echo count)
+    _T2 = {"MSME", "MGE", "CPMG", "MEMS", "GRASE", "UTE", "MEMD"}
+    _T1 = {"VTR", "RAREVTR", "IR", "FLASH", "VFA", "SSFP"}
+    if any(k in mu for k in _T2) or "T2" in mu:
+        modality = "T2"
+    elif any(k in mu for k in _T1) or "T1" in mu:
+        modality = "T1"
+    elif "RARE" in mu:
+        modality = "anat" if n_echo < 3 else "T2"
+    elif n_echo >= 2:
+        # Multi-echo with unrecognised method name → likely T2
+        modality = "T2"
+    else:
+        modality = "other"
+
+    dcm, nii = _bruker_locate_exports(scan_dir)
+
+    # Use DICOM SeriesDescription as a better title when available
+    title = method_name
+    if dcm:
+        try:
+            import pydicom
+            ds = pydicom.dcmread(dcm[0], stop_before_pixels=True)
+            desc = (getattr(ds, "SeriesDescription", None) or
+                    getattr(ds, "ProtocolName", None))
+            if desc:
+                title = str(desc).strip()
+        except Exception:
+            pass
+
+    print(f"[Bruker] scan {os.path.basename(scan_dir)}: method={method_name!r} "
+          f"n_echo={n_echo} modality={modality} tes={unique_tes[:4]}")
+
+    return {
+        "method":     method_name,
+        "modality":   modality,
+        "title":      title,
+        "n_echo":     n_echo,
+        "tes":        unique_tes[:8],
+        "flip_angle": flip[0] if flip else None,
+        "tr_ms":      tr[0]   if tr   else None,
+        "has_dicom":  len(dcm) > 0,
+        "has_nifti":  len(nii) > 0,
+    }
+
+
+def _find_bruker_study_root(base_dir: str) -> Optional[str]:
+    """Find the directory that contains numbered Bruker scan subfolders."""
+    def _has_numbered(d: str) -> bool:
+        try:
+            return any(n.isdigit() and os.path.isdir(os.path.join(d, n))
+                       for n in os.listdir(d))
+        except OSError:
+            return False
+
+    if _has_numbered(base_dir):
+        return base_dir
+    # Zip may wrap everything in one extra folder
+    try:
+        for name in os.listdir(base_dir):
+            full = os.path.join(base_dir, name)
+            if os.path.isdir(full) and _has_numbered(full):
+                return full
+    except OSError:
+        pass
+    return None
+
+
+def _load_dicom_series_multifile(paths: list) -> tuple:
+    """Stack individual single-frame DICOMs (slice per file) into (X,Y,Z,nTE)."""
+    import pydicom
+    frames = []
+    for path in sorted(paths):
+        try:
+            ds  = pydicom.dcmread(path, stop_before_pixels=True)
+            te  = float(getattr(ds, "EchoTime", 0.0))
+            try:
+                loc = float(ds.SliceLocation)
+            except Exception:
+                ipp = getattr(ds, "ImagePositionPatient", None)
+                loc = float(ipp[2]) if ipp else 0.0
+            frames.append({"path": path, "te": te, "loc": round(loc, 2)})
+        except Exception:
+            continue
+    if not frames:
+        raise ValueError("No readable DICOM frames")
+    unique_tes  = sorted(set(f["te"]  for f in frames))
+    unique_locs = sorted(set(f["loc"] for f in frames))
+    te_map  = {te:  i for i, te  in enumerate(unique_tes)}
+    loc_map = {loc: i for i, loc in enumerate(unique_locs)}
+    ds0 = pydicom.dcmread(frames[0]["path"])
+    rows, cols = ds0.pixel_array.shape
+    vol = np.zeros((cols, rows, len(unique_locs), len(unique_tes)), dtype=np.float32)
+    for f in frames:
+        try:
+            ds = pydicom.dcmread(f["path"])
+            vol[:, :, loc_map[f["loc"]], te_map[f["te"]]] = ds.pixel_array.astype(np.float32).T
+        except Exception:
+            continue
+    return vol, _simple_dicom_affine(pydicom.dcmread(frames[0]["path"])), np.array(unique_tes)
+
+
+@router.post("/{sid}/bruker-study")
+async def upload_bruker_study(sid: str, file: UploadFile = File(...)):
+    """Upload a zipped Bruker study folder; returns a list of all scans with metadata."""
+    import zipfile
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+
+    zip_path = os.path.join(s.dir, "study.zip")
+    with open(zip_path, "wb") as fh:
+        fh.write(await file.read())
+
+    study_dir = os.path.join(s.dir, "study")
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(study_dir)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Not a valid ZIP file")
+
+    study_root = _find_bruker_study_root(study_dir)
+    if study_root is None:
+        raise HTTPException(
+            400, "No Bruker study structure found — expected numbered scan folders (1/, 2/, …)")
+
+    s.bruker_study_dir = study_root
+
+    scans = []
+    for name in sorted(os.listdir(study_root), key=lambda n: (not n.isdigit(), n)):
+        if not name.isdigit():
+            continue
+        scan_path = os.path.join(study_root, name)
+        if not os.path.isdir(scan_path):
+            continue
+        try:
+            info = _bruker_scan_info(scan_path)
+            scans.append({"scan": int(name), **info})
+        except Exception as exc:
+            scans.append({
+                "scan": int(name), "title": f"Scan {name} (read error)",
+                "modality": "unknown", "method": "?",
+                "n_echo": 0, "tes": [], "flip_angle": None, "tr_ms": None,
+                "has_dicom": False, "has_nifti": False,
+                "error": str(exc),
+            })
+
+    if not scans:
+        raise HTTPException(400, "No scan folders found in study")
+
+    return {"scans": scans, "n_scans": len(scans)}
+
+
+@router.post("/{sid}/bruker-select")
+async def select_bruker_scan(sid: str, scan: int):
+    """Load a specific scan from the uploaded Bruker study into the session."""
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if not getattr(s, "bruker_study_dir", None):
+        raise HTTPException(400, "No Bruker study uploaded — call /bruker-study first")
+
+    scan_dir = os.path.join(s.bruker_study_dir, str(scan))
+    if not os.path.isdir(scan_dir):
+        raise HTTPException(404, f"Scan {scan} not found in study")
+
+    info = _bruker_scan_info(scan_dir)
+    dcm, nii = _bruker_locate_exports(scan_dir)
+
+    stacked = affine = acq_img = None
+    errors  = []
+
+    if dcm:
+        try:
+            stacked, affine, acq_img = (
+                _load_dicom_4d(dcm[0]) if len(dcm) == 1
+                else _load_dicom_series_multifile(dcm)
+            )
+        except Exception as exc:
+            errors.append(f"DICOM: {exc}")
+
+    if stacked is None and nii:
+        try:
+            stacked, affine, acq_img = _load_nifti_folder(nii)
+        except Exception as exc:
+            errors.append(f"NIfTI: {exc}")
+
+    if stacked is None:
+        raise HTTPException(400, f"Could not load scan {scan}: " + "; ".join(errors))
+
+    # Echo times: Bruker method file is authoritative; fall back to image metadata
+    modality = "T2" if info["modality"] == "T2" else "T1"
+    acq = acq_img
+
+    if modality == "T2" and info["tes"]:
+        bruker_tes = np.array(info["tes"], dtype=float)
+        n_vols = stacked.shape[3]
+        if len(bruker_tes) == n_vols:
+            acq = bruker_tes
+        elif len(bruker_tes) > n_vols:
+            acq = bruker_tes[:n_vols]
+
+    if acq is None:
+        acq = _default_TEs(stacked.shape[3])
+
+    s.stacked    = stacked.astype(np.float32)
+    s.affine     = affine
+    s.acq_params = acq
+    s.modality   = modality
+    s.tr_ms      = info["tr_ms"]
+    s.input_type = "bruker"
+    s.file_names = [info["title"] or f"scan_{scan}_{info['method']}"]
+
+    X, Y, Z, nVol = stacked.shape
+    label = "TE" if modality == "T2" else "flip angle"
+    print(f"[Bruker] Loaded scan {scan} '{info['title']}' — "
+          f"{modality}, {nVol} {'echoes' if modality == 'T2' else 'volumes'}, "
+          f"{X}x{Y}x{Z}")
+
+    return {
+        "shape":      [X, Y, Z],
+        "n_vols":     nVol,
+        "acq_params": acq.tolist(),
+        "vox_str":    _vox_size_str(affine),
+        "input_type": "bruker",
+        "files":      s.file_names,
+        "label":      label,
+        "modality":   modality,
+    }
+
+
 @router.post("/{sid}/demo")
 async def load_demo(sid: str, modality: str = "T2"):
     s = get_session(sid)

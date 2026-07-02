@@ -1579,6 +1579,157 @@ const App = (function() {
     a.click();
   }
 
+  /* ── Bruker study browser ──────────────────────────────────────────── */
+  let _brukerScans   = [];   // full list returned by the server
+  let _brukerFilter  = "all";
+  let _brukerSelected = null;  // { scan, modality }
+
+  async function onBrukerZip(file) {
+    if (!file) return;
+    const btn = document.querySelector(".bruker-upload-btn");
+    const origText = btn?.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = "Scanning…"; }
+    // Persistent loading toast (manually removed on completion)
+    const loadEl = document.createElement("div");
+    loadEl.className = "toast";
+    loadEl.textContent = "Scanning Bruker study — this may take a moment…";
+    document.getElementById("toast-area").append(loadEl);
+    try {
+      await _ensureSession();
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`${API}/api/load/${_sid}/bruker-study`, { method: "POST", body: fd });
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "Upload failed"); }
+      const d = await r.json();
+      _brukerScans    = d.scans;
+      _brukerSelected = null;
+      _brukerFilter   = "all";
+      _renderBrukerStudy();
+      document.getElementById("bruker-modal").classList.remove("hidden");
+      toast(`Found ${d.n_scans} scan${d.n_scans !== 1 ? "s" : ""}`, "ok");
+    } catch(e) {
+      console.error("Bruker upload error:", e);
+      toast(e.message, "error");
+    } finally {
+      loadEl.remove();
+      if (btn) { btn.disabled = false; btn.textContent = origText; }
+    }
+    // Reset the file input so the same zip can be re-uploaded
+    document.getElementById("inp-bruker").value = "";
+  }
+
+  function _renderBrukerStudy() {
+    const tbody = document.getElementById("bruker-tbody");
+    const filterMap = { all: null, T2: "T2", T1: "T1", anat: ["anat", "other", "unknown"] };
+    const want = filterMap[_brukerFilter];
+
+    // Update chip active state
+    ["all","t2","t1","anat"].forEach(k => {
+      document.getElementById(`bf-${k}`)?.classList.remove("chip-active");
+    });
+    document.getElementById(`bf-${_brukerFilter.toLowerCase()}`)?.classList.add("chip-active");
+
+    tbody.innerHTML = "";
+    for (const s of _brukerScans) {
+      const visible = (
+        !want ||
+        (Array.isArray(want) ? want.includes(s.modality) : s.modality === want)
+      );
+      if (!visible) continue;
+
+      // All scans are selectable; non-T2/T1 rows are visually dimmed but still clickable
+      const preferredFit = s.modality === "T2" ? "T2" : s.modality === "T1" ? "T1" : null;
+      const tr = document.createElement("tr");
+      if (!preferredFit) tr.classList.add("bt-muted");
+      if (_brukerSelected?.scan === s.scan) tr.classList.add("bt-selected");
+
+      const badge = { T2: "bt-badge-t2", T1: "bt-badge-t1",
+                      anat: "bt-badge-anat", other: "bt-badge-anat",
+                      unknown: "bt-badge-unk" }[s.modality] || "bt-badge-unk";
+      const modLabel = { T2: "T2 multi-echo", T1: "T1",
+                         anat: "Anat", other: "Other",
+                         unknown: "Unknown" }[s.modality] || s.modality;
+
+      const teStr = s.tes?.length
+        ? s.tes.slice(0, 5).map(t => t.toFixed(1)).join(", ") + (s.tes.length > 5 ? " …" : "")
+        : "—";
+      const echoStr = s.n_echo > 0
+        ? `${s.n_echo} echo${s.n_echo > 1 ? "es" : ""}`
+        : (s.flip_angle != null ? `FA ${s.flip_angle}°` : "—");
+      const filesStr = [s.has_dicom ? "DICOM" : null, s.has_nifti ? "NIfTI" : null]
+        .filter(Boolean).join(" · ") || "—";
+
+      tr.innerHTML = `
+        <td>${s.scan}</td>
+        <td>${s.title || "—"}</td>
+        <td><span class="bt-badge ${badge}">${modLabel}</span></td>
+        <td>${echoStr}<br><span class="bt-te-list">${teStr}</span></td>
+        <td>${filesStr}</td>
+      `;
+
+      {
+        tr.addEventListener("click", () => {
+          _brukerSelected = { scan: s.scan, modality: s.modality };
+          document.getElementById("bruker-use-btn").disabled = false;
+          const hint = preferredFit
+            ? `Selected: scan ${s.scan} — ${s.title || s.method}`
+            : `Selected: scan ${s.scan} — modality unknown, will attempt load`;
+          document.getElementById("bruker-selection-hint").textContent = hint;
+          // Highlight row
+          tbody.querySelectorAll("tr").forEach(r => r.classList.remove("bt-selected"));
+          tr.classList.add("bt-selected");
+        });
+      }
+      tbody.appendChild(tr);
+    }
+
+    if (!tbody.children.length) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--muted)">
+        No scans match this filter.</td></tr>`;
+    }
+  }
+
+  function filterBruker(type) {
+    _brukerFilter = type;
+    _brukerSelected = null;
+    document.getElementById("bruker-use-btn").disabled = true;
+    document.getElementById("bruker-selection-hint").textContent = "Click a row to select a scan";
+    _renderBrukerStudy();
+  }
+
+  async function selectBrukerScan() {
+    if (!_brukerSelected || !_sid) return;
+    const { scan } = _brukerSelected;
+    try {
+      toast(`Loading scan ${scan}…`);
+      const r = await fetch(`${API}/api/load/${_sid}/bruker-select?scan=${scan}`, { method: "POST" });
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "Load failed"); }
+      const d = await r.json();
+
+      // Close modal
+      document.getElementById("bruker-modal").classList.add("hidden");
+
+      // Auto-set modality
+      if (d.modality === "T2" || d.modality === "T1") setTool(d.modality);
+
+      // Same post-processing as _uploadScan
+      _scanReady = true;
+      document.getElementById("scan-file-list").innerHTML =
+        d.files.map(f => `<div class="fl-item">📄 ${f}</div>`).join("");
+      ortho.acqParams = d.acq_params;
+      ortho.nVols     = d.n_vols;
+      document.getElementById("vol-label").textContent =
+        d.modality === "T1" ? "flip angle" : "TE";
+      toast(`Loaded scan ${scan} · ${d.n_vols} ${d.label === "TE" ? "echoes" : "volumes"} · ${d.vox_str}`, "ok");
+      await _doCheck();
+    } catch(e) { toast(e.message, "error"); }
+  }
+
+  function closeBrukerModal(e) {
+    if (e && e.target !== document.getElementById("bruker-modal")) return;
+    document.getElementById("bruker-modal").classList.add("hidden");
+  }
+
   /* ── Init ──────────────────────────────────────────────────────────── */
   setStep(1);
   setTool("T2");
@@ -1592,6 +1743,7 @@ const App = (function() {
     download,
     _updateDerived,
     ortho, output,
+    onBrukerZip, filterBruker, selectBrukerScan, closeBrukerModal,
     get _sid() { return _sid; },
   };
 })();

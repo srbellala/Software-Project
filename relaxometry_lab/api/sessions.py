@@ -16,8 +16,9 @@ class Session:
         self.tr_ms: Optional[float] = None            # for T1 VFA
         self.seg: Optional[np.ndarray] = None         # (X, Y, Z)
         self.seg_affine: Optional[np.ndarray] = None
-        self.input_type: Optional[str] = None         # "dicom" or "nifti"
+        self.input_type: Optional[str] = None         # "dicom", "nifti", or "bruker"
         self.file_names: list = []
+        self.bruker_study_dir: Optional[str] = None  # path to extracted Bruker study root
 
         # Fit results
         self.param_map: Optional[np.ndarray] = None   # all valid T2/T1 (X,Y,Z)
