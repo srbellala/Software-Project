@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Relaxometry Lab</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* ── Landing-only styles ──────────────────────────────────────────────── */
+
+    .lp-main {
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    /* Hero */
+    .hero {
+      background: linear-gradient(160deg, #1a3a56 0%, #234a6e 55%, #2f5f8e 100%);
+      color: #fff;
+      padding: 80px 32px 72px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(circle, rgba(255,255,255,.07) 1px, transparent 1px);
+      background-size: 22px 22px;
+      pointer-events: none;
+    }
+    .hero-inner { position: relative; max-width: 680px; margin: 0 auto; }
+
+    .hero-badge {
+      display: inline-block;
+      padding: 4px 14px;
+      border: 1px solid rgba(255,255,255,.35);
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      color: rgba(255,255,255,.75);
+      margin-bottom: 24px;
+    }
+    .hero-title {
+      font-size: 52px;
+      font-weight: 800;
+      letter-spacing: -.02em;
+      line-height: 1.1;
+      margin-bottom: 16px;
+      color: #fff;
+    }
+    .hero-title sub {
+      font-size: 0.55em;
+      vertical-align: baseline;
+      position: relative;
+      top: 0.12em;
+    }
+    .hero-sub {
+      font-size: 17px;
+      color: rgba(255,255,255,.78);
+      line-height: 1.6;
+      max-width: 520px;
+      margin: 0 auto 36px;
+    }
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .hero-actions .btn {
+      padding: 12px 28px;
+      font-size: 14px;
+    }
+    .btn-hero-primary {
+      background: #fff;
+      color: var(--navy);
+      border: none;
+    }
+    .btn-hero-primary:hover { background: #e8f2fb; }
+    .btn-hero-ghost {
+      background: transparent;
+      color: #fff;
+      border: 1.5px solid rgba(255,255,255,.5);
+    }
+    .btn-hero-ghost:hover { background: rgba(255,255,255,.1); border-color: #fff; }
+
+    /* Content sections */
+    .lp-section {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 56px 32px;
+    }
+    .lp-section + .lp-section { padding-top: 0; }
+
+    .section-eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    .section-title {
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--navy);
+      margin-bottom: 8px;
+    }
+    .section-sub {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 36px;
+      max-width: 540px;
+    }
+
+    /* Tool cards */
+    .tool-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px;
+    }
+
+    .tool-card {
+      background: var(--card);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 28px 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      text-decoration: none;
+      color: inherit;
+      transition: transform .15s, box-shadow .15s;
+      border: 1.5px solid transparent;
+      position: relative;
+    }
+    .tool-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 28px rgba(35,74,110,.16);
+      border-color: var(--accent);
+    }
+    .tool-card.disabled-card {
+      opacity: .6;
+      pointer-events: none;
+    }
+
+    .tool-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 4px;
+    }
+    .icon-t2  { background: #dbeeff; }
+    .icon-t1  { background: #fde8d0; }
+    .icon-t2s { background: #e8f5e9; }
+
+    .tool-card-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--navy);
+    }
+    .tool-card-sub {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.55;
+      flex: 1;
+    }
+    .tool-card-tags {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .tag {
+      font-size: 10.5px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 10px;
+      background: var(--accent-lt);
+      color: var(--navy);
+    }
+    .tag-gray { background: #eee; color: var(--muted); }
+
+    .coming-soon-badge {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 10px;
+      background: #f0f0f0;
+      color: var(--muted);
+      letter-spacing: .04em;
+    }
+
+    .tool-card-arrow {
+      font-size: 18px;
+      color: var(--accent);
+      margin-top: 6px;
+      transition: transform .15s;
+    }
+    .tool-card:hover .tool-card-arrow { transform: translateX(4px); }
+
+    /* How it works */
+    .how-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0;
+      position: relative;
+    }
+    .how-step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 0 20px;
+      position: relative;
+    }
+    .how-step + .how-step::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 24px;
+      width: 1px;
+      height: 48px;
+      background: var(--border);
+    }
+    .how-num {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--navy);
+      color: #fff;
+      font-size: 18px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 14px;
+      flex-shrink: 0;
+    }
+    .how-step-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--navy);
+      margin-bottom: 6px;
+    }
+    .how-step-sub {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    /* Resource grid */
+    .resource-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .resource-card {
+      background: var(--card);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 22px 20px;
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: transform .15s, box-shadow .15s;
+      border: 1.5px solid transparent;
+    }
+    .resource-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(35,74,110,.14);
+      border-color: var(--border);
+    }
+    .resource-icon { font-size: 26px; margin-bottom: 4px; }
+    .resource-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--navy);
+    }
+    .resource-sub { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+    /* Divider */
+    .lp-divider {
+      max-width: 1000px;
+      margin: 0 auto 0;
+      padding: 0 32px;
+    }
+    .lp-divider hr {
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Footer */
+    .lp-footer {
+      text-align: center;
+      padding: 32px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* Navbar home variant — hide tool buttons */
+    .navbar-home .tool-btn-group { display: none; }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <nav class="navbar">
+    <span class="navbar-brand">Relaxometry Lab</span>
+    <div class="navbar-sep"></div>
+    <a href="/tool" class="tool-btn" style="text-decoration:none">Open Tool</a>
+  </nav>
+
+  <main class="lp-main">
+
+    <!-- ── Hero ──────────────────────────────────────────────────────────── -->
+    <section class="hero">
+      <div class="hero-inner">
+        <div class="hero-badge">Open Source · Browser-Based · No Install Required</div>
+        <h1 class="hero-title">Relaxometry Lab</h1>
+        <p class="hero-sub">
+          MRI T<sub>2</sub> and T<sub>1</sub> relaxometry fitting for preclinical data — directly in your browser.
+        </p>
+        <div class="hero-actions">
+          <a href="/tool" class="btn btn-hero-primary">Open T₂ / T₁ Tool →</a>
+          <a href="/tool" class="btn btn-hero-ghost"
+             onclick="sessionStorage.setItem('rl_demo','1')">Try with Sample Data</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Tools ─────────────────────────────────────────────────────────── -->
+    <div class="lp-section">
+      <div class="section-eyebrow">Tools</div>
+      <h2 class="section-title">What can you fit?</h2>
+      <p class="section-sub">
+        Upload DICOM, NIfTI, or a Bruker study ZIP — the tool handles the rest.
+      </p>
+
+      <div class="tool-grid">
+
+        <a href="/tool" class="tool-card">
+          <div class="tool-icon icon-t2">🔵</div>
+          <div class="tool-card-title">T₂ Relaxometry</div>
+          <div class="tool-card-sub">
+            Mono-exponential T₂ mapping from multi-echo spin-echo data.
+            Voxel-by-voxel curve fitting with quality-filtered output maps.
+          </div>
+          <div class="tool-card-tags">
+            <span class="tag">MSME</span>
+            <span class="tag">CPMG</span>
+            <span class="tag">Multi-Echo</span>
+          </div>
+          <div class="tool-card-arrow">→</div>
+        </a>
+
+        <a href="/tool" class="tool-card">
+          <div class="tool-icon icon-t1">🟠</div>
+          <div class="tool-card-title">T₁ Relaxometry</div>
+          <div class="tool-card-sub">
+            Variable flip angle T₁ mapping from spoiled gradient echo data.
+            Supports single-TR VFA with Ernst angle fitting.
+          </div>
+          <div class="tool-card-tags">
+            <span class="tag">VFA</span>
+            <span class="tag">FLASH</span>
+            <span class="tag">SPGR</span>
+          </div>
+          <div class="tool-card-arrow">→</div>
+        </a>
+
+        <div class="tool-card disabled-card">
+          <span class="coming-soon-badge">Coming Soon</span>
+          <div class="tool-icon icon-t2s">🟢</div>
+          <div class="tool-card-title">T₂* / R₂* Mapping</div>
+          <div class="tool-card-sub">
+            Multi-echo gradient echo T₂* fitting with optional
+            B₀ field correction and fat/water separation.
+          </div>
+          <div class="tool-card-tags">
+            <span class="tag tag-gray">MGE</span>
+            <span class="tag tag-gray">GRE</span>
+            <span class="tag tag-gray">mGRE</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="lp-divider"><hr /></div>
+
+    <!-- ── How it works ──────────────────────────────────────────────────── -->
+    <div class="lp-section">
+      <div class="section-eyebrow">Workflow</div>
+      <h2 class="section-title">Four steps from data to result</h2>
+      <p class="section-sub">No scripts. No command line. Works with DICOM, NIfTI, and raw Bruker exports.</p>
+
+      <div class="how-grid">
+        <div class="how-step">
+          <div class="how-num">1</div>
+          <div class="how-step-title">Load Data</div>
+          <div class="how-step-sub">
+            Upload DICOM, NIfTI, or a Bruker study ZIP.
+            Optionally add a segmentation mask.
+          </div>
+        </div>
+        <div class="how-step">
+          <div class="how-num">2</div>
+          <div class="how-step-title">Preview</div>
+          <div class="how-step-sub">
+            Browse your scan in 3-plane orthographic view,
+            scroll slices, zoom, and verify alignment.
+          </div>
+        </div>
+        <div class="how-step">
+          <div class="how-num">3</div>
+          <div class="how-step-title">Fit</div>
+          <div class="how-step-sub">
+            Run voxel-wise curve fitting.
+            Explore individual decay curves and ROI statistics.
+          </div>
+        </div>
+        <div class="how-step">
+          <div class="how-num">4</div>
+          <div class="how-step-title">Export</div>
+          <div class="how-step-sub">
+            Download NIfTI maps, CSV statistics,
+            a multi-page PDF report, or raw NumPy arrays.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="lp-divider"><hr /></div>
+
+    <!-- ── Data formats ───────────────────────────────────────────────────── -->
+    <div class="lp-section">
+      <div class="section-eyebrow">Data Formats</div>
+      <h2 class="section-title">Supported inputs</h2>
+      <p class="section-sub">Bring your data in any of these formats — no preprocessing needed.</p>
+
+      <div class="tool-grid">
+        <div class="tool-card" style="pointer-events:none;">
+          <div class="tool-icon" style="background:#f3e8ff;font-size:22px;">📁</div>
+          <div class="tool-card-title">DICOM</div>
+          <div class="tool-card-sub">
+            Single enhanced multi-frame DICOM or a stack of per-slice
+            single-frame files. Echo time read from standard tags.
+          </div>
+          <div class="tool-card-tags">
+            <span class="tag">.dcm</span>
+          </div>
+        </div>
+        <div class="tool-card" style="pointer-events:none;">
+          <div class="tool-icon" style="background:#e8f5e9;font-size:22px;">🧊</div>
+          <div class="tool-card-title">NIfTI</div>
+          <div class="tool-card-sub">
+            One file per echo (3D) or a single 4D volume.
+            Echo times read from BIDS sidecar JSON when present.
+          </div>
+          <div class="tool-card-tags">
+            <span class="tag">.nii</span>
+            <span class="tag">.nii.gz</span>
+          </div>
+        </div>
+        <div class="tool-card" style="pointer-events:none;">
+          <div class="tool-icon" style="background:#fff8e1;font-size:22px;">🗜️</div>
+          <div class="tool-card-title">Bruker Study ZIP</div>
+          <div class="tool-card-sub">
+            Zip a Bruker ParaVision study folder and upload it directly.
+            Browse all scans, pick one, and load with a click.
+          </div>
+          <div class="tool-card-tags">
+            <span class="tag">.zip</span>
+            <span class="tag">ParaVision</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="lp-divider"><hr /></div>
+
+    <!-- ── Resources ─────────────────────────────────────────────────────── -->
+    <div class="lp-section">
+      <div class="section-eyebrow">Resources</div>
+      <h2 class="section-title">Get started quickly</h2>
+      <p class="section-sub">Sample data, documentation, and source code.</p>
+
+      <div class="resource-grid">
+
+        <a href="/tool" class="resource-card"
+           onclick="sessionStorage.setItem('rl_demo','1')">
+          <div class="resource-icon">🧪</div>
+          <div class="resource-title">Sample Dataset</div>
+          <div class="resource-sub">
+            Load a synthetic multi-echo T₂ dataset directly in the tool
+            — no file needed.
+          </div>
+        </a>
+
+        <a href="https://github.com" class="resource-card" target="_blank">
+          <div class="resource-icon">🐙</div>
+          <div class="resource-title">GitHub</div>
+          <div class="resource-sub">
+            Source code, issue tracker, and contribution guide.
+          </div>
+        </a>
+
+        <a href="#" class="resource-card">
+          <div class="resource-icon">📄</div>
+          <div class="resource-title">Documentation</div>
+          <div class="resource-sub">
+            File format requirements, fitting model details,
+            and export format descriptions.
+          </div>
+        </a>
+
+        <a href="#" class="resource-card">
+          <div class="resource-icon">📬</div>
+          <div class="resource-title">Report an Issue</div>
+          <div class="resource-sub">
+            Found a bug or have a feature request?
+            Open an issue on GitHub.
+          </div>
+        </a>
+
+      </div>
+    </div>
+
+    <!-- ── Footer ────────────────────────────────────────────────────────── -->
+    <footer class="lp-footer">
+      Relaxometry Lab · Open source MRI analysis · Built with FastAPI + vanilla JS
+    </footer>
+
+  </main>
+</div>
+</body>
+</html>

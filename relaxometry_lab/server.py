@@ -20,6 +20,11 @@ app.mount("/static", StaticFiles(directory=os.path.join(_here, "static")), name=
 
 @app.get("/")
 def root():
+    return FileResponse(os.path.join(_here, "static", "landing.html"))
+
+
+@app.get("/tool")
+def tool():
     return FileResponse(os.path.join(_here, "static", "index.html"))
 
 
