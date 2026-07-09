@@ -8,7 +8,7 @@ T2 model and voxel fitter match t2_voxel_explorer.py exactly:
   - t2_good:  quality-filtered map requiring fit-R² ≥ 0.5
   - sigma:    MAD from background voxels (seg == 0), min 50 samples
 """
-import asyncio, base64, json
+import asyncio, base64, json, uuid
 from typing import Optional
 
 import numpy as np
@@ -19,6 +19,11 @@ from pydantic import BaseModel
 from api.sessions import get_session
 
 router = APIRouter()
+
+_CMP_COLORS = [
+    "#234a6e", "#e07020", "#2a8a3c", "#8b2fc9",
+    "#c44a4a", "#1a7a8a", "#8a6a1a", "#4a5580",
+]
 
 
 # ─────────────────────────────── FitCfg (mirrors t2_voxel_explorer.py) ───────
@@ -171,8 +176,21 @@ async def _run_fit(s, req):
 
     # Sigma from background (MAD, matching explorer)
     s.sigma_global = _estimate_sigma_mad(stacked, s.seg)
-    s.fit_config   = {"modality": modality, "tr_ms": s.tr_ms}
     s.fitting_done = False
+
+    # User-supplied parameter overrides (from frontend param table)
+    up = req.params
+    thresh_lo = float(up.get("thresh_lo",  FC.LOW_THRESH_MS))
+    thresh_hi = float(up.get("thresh_hi",  FC.HIGH_THRESH_MS))
+    r2_thresh = float(up.get("r2_thresh",  FC.R2_FIT_THRESH))
+
+    s.fit_config = {
+        "modality":  modality,
+        "tr_ms":     s.tr_ms,
+        "thresh_lo": thresh_lo,
+        "thresh_hi": thresh_hi,
+        "r2_thresh": r2_thresh,
+    }
 
     # Result maps
     param_map  = np.full((X, Y, Z), np.nan, dtype=np.float32)   # T2 or T1 (ms)
@@ -184,12 +202,6 @@ async def _run_fit(s, req):
 
     sigma = s.sigma_global
     batch = max(1, total // 200)
-
-    # User-supplied parameter overrides (from frontend param table)
-    up = req.params
-    thresh_lo = float(up.get("thresh_lo",  FC.LOW_THRESH_MS))
-    thresh_hi = float(up.get("thresh_hi",  FC.HIGH_THRESH_MS))
-    r2_thresh = float(up.get("r2_thresh",  FC.R2_FIT_THRESH))
 
     if modality == "T2":
         TE_s = s.acq_params / 1000.0          # ms → seconds (critical)
@@ -488,3 +500,100 @@ async def get_scatter(sid: str):
     vals   = [v["t2"] for v in voxels]
     median = float(np.median(vals)) if vals else None
     return {"voxels": voxels, "median": median, "n": len(voxels)}
+
+
+# ─────────────────────────────── comparison slots ─────────────────────────────
+
+@router.post("/{sid}/save-scan")
+async def save_scan(sid: str, label: Optional[str] = None, group: Optional[str] = None):
+    """Snapshot the current fit result into the session's comparison list."""
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if not s.fitting_done or s.param_map is None:
+        raise HTTPException(400, "No completed fit to save")
+
+    pm = s.good_map if s.good_map is not None else s.param_map
+    finite_vals = pm[np.isfinite(pm)]
+
+    roi_mask = (s.seg > 0) if s.seg is not None else np.isfinite(pm)
+
+    snr_median = None
+    if s.stacked is not None and s.sigma_global and roi_mask.any():
+        first_echo = s.stacked[..., 0][roi_mask]
+        first_echo = first_echo[np.isfinite(first_echo)]
+        if first_echo.size > 0:
+            snr_median = float(np.median(first_echo) / s.sigma_global)
+
+    chi2_median = None
+    if s.chi2_map is not None:
+        c2 = s.chi2_map[roi_mask]
+        c2 = c2[np.isfinite(c2)]
+        if c2.size > 0:
+            chi2_median = float(np.median(c2))
+
+    stats = {}
+    if len(finite_vals) > 0:
+        stats = {
+            "median": float(np.nanmedian(finite_vals)),
+            "mean":   float(np.nanmean(finite_vals)),
+            "std":    float(np.nanstd(finite_vals)),
+            "p25":    float(np.nanpercentile(finite_vals, 25)),
+            "p75":    float(np.nanpercentile(finite_vals, 75)),
+            "n_vox":  int(np.sum(np.isfinite(finite_vals))),
+        }
+
+    hist_counts, hist_edges = [], []
+    if len(finite_vals) > 0:
+        lo, hi = np.nanpercentile(finite_vals, 2), np.nanpercentile(finite_vals, 98)
+        counts, edges = np.histogram(finite_vals, bins=80, range=(lo, hi))
+        hist_counts = counts.tolist()
+        hist_edges  = edges.tolist()
+
+    decay_curve, decay_p25, decay_p75 = [], [], []
+    if s.stacked is not None and roi_mask.any():
+        roi_vox = s.stacked[roi_mask, :]
+        decay_curve = np.nanmedian(roi_vox, axis=0).tolist()
+        decay_p25   = np.nanpercentile(roi_vox, 25, axis=0).tolist()
+        decay_p75   = np.nanpercentile(roi_vox, 75, axis=0).tolist()
+
+    auto_label = s.file_names[0] if s.file_names else f"Scan {len(s.saved_scans) + 1}"
+    slot = {
+        "id":          str(uuid.uuid4()),
+        "label":       (label.strip() if label and label.strip() else auto_label),
+        "group":       (group.strip() if group and group.strip() else None),
+        "modality":    s.modality,
+        "acq_params":  s.acq_params.tolist() if s.acq_params is not None else [],
+        "stats":       stats,
+        "snr_median":  snr_median,
+        "chi2_median": chi2_median,
+        "decay_curve": decay_curve,
+        "decay_p25":   decay_p25,
+        "decay_p75":   decay_p75,
+        "hist_counts": hist_counts,
+        "hist_edges":  hist_edges,
+        "color":       _CMP_COLORS[len(s.saved_scans) % len(_CMP_COLORS)],
+    }
+    s.saved_scans.append(slot)
+    return {"saved": True, "id": slot["id"], "label": slot["label"],
+            "n_saved": len(s.saved_scans)}
+
+
+@router.get("/{sid}/saved-scans")
+async def list_saved_scans(sid: str):
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    return {"scans": s.saved_scans, "n": len(s.saved_scans)}
+
+
+@router.delete("/{sid}/saved-scans/{slot_id}")
+async def delete_saved_scan(sid: str, slot_id: str):
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    before = len(s.saved_scans)
+    s.saved_scans = [sc for sc in s.saved_scans if sc["id"] != slot_id]
+    if len(s.saved_scans) == before:
+        raise HTTPException(404, "Slot not found")
+    return {"deleted": True, "n_saved": len(s.saved_scans)}

@@ -543,8 +543,20 @@ class OutputPanel {
 
   setMode(mode) {
     this._mode = mode;
-    document.getElementById("mode-roi").classList.toggle("active",   mode === "roi");
-    document.getElementById("mode-voxel").classList.toggle("active", mode === "voxel");
+    document.getElementById("mode-roi").classList.toggle("active",     mode === "roi");
+    document.getElementById("mode-voxel").classList.toggle("active",   mode === "voxel");
+    document.getElementById("mode-compare").classList.toggle("active", mode === "compare");
+
+    // Show/hide the 3-column output layout vs the full-width compare panel
+    const layout = document.getElementById("output-layout");
+    const cmpPanel = document.getElementById("out-compare-panel");
+    if (layout)   layout.classList.toggle("hidden",   mode === "compare");
+    if (cmpPanel) cmpPanel.classList.toggle("hidden", mode !== "compare");
+
+    if (mode === "compare") {
+      App.comparison.refresh(App._sid);
+      return;
+    }
 
     document.getElementById("out-roi-mid").classList.toggle("hidden",   mode !== "roi");
     document.getElementById("out-roi-right").classList.toggle("hidden",  mode !== "roi");
@@ -1163,7 +1175,7 @@ class VoxelExplorer {
     const layout = {
       ...PLOTLY_LAYOUT,
       showlegend: false,
-      xaxis: { title: { text: "active voxels", standoff: 14 }, color: "#6b7e94",
+      xaxis: { title: { text: "Voxel index", standoff: 14 }, color: "#6b7e94",
                gridcolor: "#e8e6e0", zeroline: false },
       yaxis: { title: { text: `${lbl} (ms)`, standoff: 4 }, color: "#6b7e94",
                gridcolor: "#e8e6e0", zeroline: false },
@@ -1197,6 +1209,147 @@ class VoxelExplorer {
 }
 
 
+/* ────────────────────────────────────────────── Comparison panel ─── */
+class ComparisonPanel {
+  constructor() { this._scans = []; }
+
+  async refresh(sid) {
+    if (!sid) return;
+    try {
+      const r = await fetch(`${API}/api/fit/${sid}/saved-scans`);
+      if (!r.ok) return;
+      const d = await r.json();
+      this._scans = d.scans;
+    } catch(e) { console.error("comparison refresh:", e); return; }
+    this._render();
+  }
+
+  async save(sid, label) {
+    const qs = label ? `?label=${encodeURIComponent(label)}` : "";
+    const r = await fetch(`${API}/api/fit/${sid}/save-scan${qs}`, { method: "POST" });
+    if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "Save failed"); }
+    const d = await r.json();
+    await this.refresh(sid);
+    return d;
+  }
+
+  async remove(sid, slotId) {
+    await fetch(`${API}/api/fit/${sid}/saved-scans/${slotId}`, { method: "DELETE" });
+    await this.refresh(sid);
+  }
+
+  _render() {
+    const scans = this._scans;
+    const n = scans.length;
+
+    // Mode-button badge
+    const modeBadge = document.getElementById("cmp-mode-badge");
+    if (modeBadge) {
+      modeBadge.textContent = n;
+      modeBadge.classList.toggle("hidden", n === 0);
+    }
+    // Panel count badge
+    const cntBadge = document.getElementById("cmp-count-badge");
+    if (cntBadge) {
+      cntBadge.textContent = `${n} saved`;
+      cntBadge.classList.toggle("hidden", n === 0);
+    }
+
+    document.getElementById("cmp-empty")?.classList.toggle("hidden", n > 0);
+    document.getElementById("cmp-content")?.classList.toggle("hidden", n === 0);
+    if (n === 0) return;
+
+    // Stats table
+    const tbody = document.getElementById("cmp-tbody");
+    if (tbody) {
+      tbody.innerHTML = "";
+      scans.forEach(sc => {
+        const st = sc.stats || {};
+        const f  = v => (v !== undefined && isFinite(v)) ? v.toFixed(1) : "—";
+        const fN = v => (v !== undefined && isFinite(v)) ? v.toLocaleString() : "—";
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td style="width:18px;padding-right:6px;">
+            <span class="cmp-dot" style="background:${sc.color};"></span>
+          </td>
+          <td><div class="cmp-name-cell">
+            <span class="cmp-name-label" title="${sc.label}">${sc.label}</span>
+          </div></td>
+          <td style="font-size:11px;color:var(--muted);">${sc.modality}</td>
+          <td class="cmp-val">${f(st.median)}</td>
+          <td class="cmp-muted">${f(st.mean)}</td>
+          <td class="cmp-muted">${f(st.std)}</td>
+          <td class="cmp-muted">${f(st.p25)}</td>
+          <td class="cmp-muted">${f(st.p75)}</td>
+          <td class="cmp-muted">${fN(st.n_vox)}</td>
+          <td><button class="cmp-del-btn" title="Remove"
+                onclick="App.removeCompareScan('${sc.id}')">×</button></td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    this._renderHist(scans);
+    this._renderDecay(scans);
+  }
+
+  _renderHist(scans) {
+    const traces = scans.filter(s => s.hist_counts?.length).map(sc => {
+      const mids = sc.hist_edges.slice(0, -1).map((e, i) => (e + sc.hist_edges[i+1]) / 2);
+      return {
+        x: mids, y: sc.hist_counts, type: "scatter", mode: "lines",
+        name: sc.label,
+        line: { color: sc.color, width: 2 },
+        fill: "tozeroy", fillcolor: _hexToRgba(sc.color, 0.10),
+      };
+    });
+    if (!traces.length) return;
+    Plotly.react("cmp-hist", traces, {
+      ...PLOTLY_LAYOUT,
+      showlegend: true,
+      legend: { x: 0.98, xanchor: "right", y: 0.98, bgcolor: "rgba(0,0,0,0)", font: { size: 9 } },
+      xaxis: { title: { text: "Value (ms)", standoff: 14 }, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+      yaxis: { color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+    }, PLOTLY_CFG);
+  }
+
+  _renderDecay(scans) {
+    const traces = [];
+    scans.filter(s => s.decay_curve?.length).forEach(sc => {
+      const acq = sc.acq_params;
+      const p25 = sc.decay_p25, p75 = sc.decay_p75;
+      if (p25?.length === acq.length && p75?.length === acq.length) {
+        traces.push({ x: acq, y: p25, mode: "lines", line: { width: 0 },
+          hoverinfo: "skip", showlegend: false });
+        traces.push({ x: acq, y: p75, mode: "lines", line: { width: 0 },
+          fill: "tonexty", fillcolor: _hexToRgba(sc.color, 0.12),
+          hoverinfo: "skip", showlegend: false });
+      }
+      traces.push({
+        x: acq, y: sc.decay_curve, mode: "lines+markers",
+        name: sc.label,
+        line: { color: sc.color, width: 2 },
+        marker: { color: sc.color, size: 5 },
+      });
+    });
+    if (!traces.length) return;
+    const xlabel = scans.some(s => s.modality === "T2") ? "Echo Time (ms)" : "Flip Angle (°)";
+    Plotly.react("cmp-decay", traces, {
+      ...PLOTLY_LAYOUT,
+      showlegend: true,
+      legend: { x: 0.98, xanchor: "right", y: 0.98, bgcolor: "rgba(0,0,0,0)", font: { size: 9 } },
+      xaxis: { title: { text: xlabel, standoff: 14 }, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+      yaxis: { title: { text: "Signal", standoff: 14 }, color: "#6b7e94", gridcolor: "#e8e6e0", zeroline: false },
+    }, PLOTLY_CFG);
+  }
+}
+
+function _hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 /* ────────────────────────────────────────────────────── Parula colormap ─── */
 // 8-stop approximation of MATLAB "parula"
 function _parula(t) {
@@ -1220,9 +1373,12 @@ const App = (function() {
   let _sid  = null;
   let _modality = "T2";
   let _scanReady = false;
+  let _currentScanLabel = "";    // label of the most recently loaded scan
+  let _brukerStudyLoaded = false; // true once a Bruker ZIP has been processed
   const ortho         = new OrthoViewer();
   const output        = new OutputPanel();
   const voxelExplorer = new VoxelExplorer(output);
+  const comparison    = new ComparisonPanel();
   output._voxelExplorer = voxelExplorer;
 
   /* ── Fit parameter table (new configure-fit layout) ───────────────── */
@@ -1259,13 +1415,13 @@ const App = (function() {
         <td><span class="pt-dash">—</span></td>
       </tr>
       <tr class="pt-row">
-        <td class="pt-name">Signal thresh <span class="pt-unit">(ms)</span></td>
+        <td class="pt-name">T2 value filter <span class="pt-unit">(ms)</span></td>
         <td><span class="pt-dash">—</span></td>
         <td><input class="pt-inp" type="number" id="p-thr-lo" value="0.0" step="1"/></td>
         <td><input class="pt-inp" type="number" id="p-thr-hi" value="4000" step="10"/></td>
       </tr>
       <tr class="pt-row">
-        <td class="pt-name">R² fit thresh</td>
+        <td class="pt-name">Min fit quality (R²)</td>
         <td><input class="pt-inp" type="number" id="p-r2thr" value="0.50" step="0.01"
              min="0" max="1"/></td>
         <td><span class="pt-dash">—</span></td>
@@ -1294,7 +1450,7 @@ const App = (function() {
         <td class="pt-derived-val" id="d-r1-hi">100.0</td>
       </tr>
       <tr class="pt-row">
-        <td class="pt-name">R² fit thresh</td>
+        <td class="pt-name">Min fit quality (R²)</td>
         <td><input class="pt-inp" type="number" id="p-r2thr" value="0.50" step="0.01"
              min="0" max="1"/></td>
         <td><span class="pt-dash">—</span></td>
@@ -1369,6 +1525,13 @@ const App = (function() {
   }
 
   /* ── Tool (modality) selector ──────────────────────────────────────── */
+  function _setModalityLock(locked) {
+    document.getElementById("mb-t2").disabled = locked;
+    document.getElementById("mb-t1").disabled = locked;
+    document.getElementById("tool-t2").disabled = locked;
+    document.getElementById("tool-t1").disabled = locked;
+  }
+
   function setTool(mod) {
     _modality = mod;
     document.getElementById("tool-t2").classList.toggle("active", mod==="T2");
@@ -1376,8 +1539,8 @@ const App = (function() {
     document.getElementById("mb-t2").classList.toggle("active",   mod==="T2");
     document.getElementById("mb-t1").classList.toggle("active",   mod==="T1");
     const hint = mod === "T2"
-      ? "Upload a Single 4D Enhanced DICOM (.dcm) — or a Folder of Per-Echo NIfTI files"
-      : "Upload NIfTI volumes for each Flip Angle (.nii / .nii.gz)";
+      ? "Upload a 4D DICOM (.dcm), a folder of per-echo NIfTI files, or a Bruker Study ZIP"
+      : "Upload one NIfTI volume per flip angle (.nii / .nii.gz), or a Bruker Study ZIP";
     document.getElementById("scan-hint").textContent = hint;
     _buildParamTable(mod);
   }
@@ -1404,6 +1567,10 @@ const App = (function() {
   }
 
   async function _uploadScan(files) {
+    // Single .zip → treat as Bruker study
+    if (files.length === 1 && files[0].name.toLowerCase().endsWith(".zip")) {
+      return onBrukerZip(files[0]);
+    }
     try {
       await _ensureSession();
       const fd = new FormData();
@@ -1413,12 +1580,15 @@ const App = (function() {
       if (!r.ok) { const d=await r.json(); throw new Error(d.detail||"Upload failed"); }
       const d = await r.json();
       _scanReady = true;
+      _setModalityLock(true);
       const fl = document.getElementById("scan-file-list");
       fl.innerHTML = d.files.map(f=>`<div class="fl-item">📄 ${f}</div>`).join("");
       ortho.acqParams = d.acq_params;
       ortho.nVols = d.n_vols;
       document.getElementById("vol-label").textContent =
         d.modality === "T1" ? "flip angle" : "TE";
+      _currentScanLabel = d.files?.[0] || "";
+      document.getElementById("btn-clear-scan").disabled = false;
       toast(`Loaded ${d.n_vols} volumes · ${d.vox_str}`, "ok");
       await _doCheck();
     } catch(e) { toast(e.message, "error"); }
@@ -1429,15 +1599,47 @@ const App = (function() {
       if (!_sid) { toast("Upload scan first", "error"); return; }
       const fd = new FormData();
       fd.append("file", file);
-      toast("Uploading Segmentation");
+      toast("Uploading segmentation…");
       const r = await fetch(`${API}/api/load/${_sid}/segmentation`, { method:"POST", body:fd });
       if (!r.ok) { const d=await r.json(); throw new Error(d.detail||"Seg upload failed"); }
       const d = await r.json();
       document.getElementById("seg-file-list").innerHTML =
         `<div class="fl-item">🎭 ${d.filename} (labels: ${d.labels.join(", ")})</div>`;
-      toast("Segmentation Loaded", "Ok");
+      document.getElementById("btn-clear-seg").disabled = false;
+      toast("Segmentation loaded", "ok");
       await _doCheck();
     } catch(e) { toast(e.message, "Error"); }
+  }
+
+  /* ── Clear uploaded scan / segmentation ───────────────────────────── */
+  async function clearScan() {
+    if (_sid) {
+      try { await fetch(`${API}/api/load/${_sid}/scan`, { method: "DELETE" }); }
+      catch (e) { /* clear local UI regardless */ }
+    }
+    _scanReady = false;
+    _setModalityLock(false);
+    _currentScanLabel = "";
+    _brukerStudyLoaded = false;
+    document.getElementById("scan-file-list").innerHTML = "";
+    document.getElementById("btn-reopen-bruker")?.classList.add("hidden");
+    document.getElementById("btn-clear-scan").disabled = true;
+    document.getElementById("btn-next-preview").disabled = true;
+    ortho.acqParams = null;
+    ortho.nVols = 0;
+    await _doCheck();
+    toast("Scan cleared", "ok");
+  }
+
+  async function clearSeg() {
+    if (_sid) {
+      try { await fetch(`${API}/api/load/${_sid}/segmentation`, { method: "DELETE" }); }
+      catch (e) { /* clear local UI regardless */ }
+    }
+    document.getElementById("seg-file-list").innerHTML = "";
+    document.getElementById("btn-clear-seg").disabled = true;
+    await _doCheck();
+    toast("Segmentation cleared", "ok");
   }
 
   async function _doCheck() {
@@ -1455,11 +1657,12 @@ const App = (function() {
   async function loadDemo() {
     try {
       await _ensureSession();
-      toast("Loading Demo Dataset");
+      toast("Loading demo data…");
       const r = await fetch(`${API}/api/load/${_sid}/demo?modality=${_modality}`, { method:"POST" });
       if (!r.ok) { const d=await r.json(); throw new Error(d.detail||"Demo failed"); }
       const d = await r.json();
       _scanReady = true;
+      _setModalityLock(true);
       document.getElementById("scan-file-list").innerHTML =
         d.files.map(f=>`<div class="fl-item">📄 ${f}</div>`).join("");
       document.getElementById("seg-file-list").innerHTML =
@@ -1469,8 +1672,11 @@ const App = (function() {
       box.className = "align-box ok";
       ortho.acqParams = d.acq_params;
       ortho.nVols = d.n_vols;
+      _currentScanLabel = `demo_${_modality}`;
       document.getElementById("btn-next-preview").disabled = false;
-      toast("Demo Dataset Ready ", "OK");
+      document.getElementById("btn-clear-scan").disabled = false;
+      document.getElementById("btn-clear-seg").disabled = false;
+      toast("Demo data ready", "ok");
     } catch(e) { toast(e.message, "Error"); }
   }
 
@@ -1488,6 +1694,14 @@ const App = (function() {
   }
 
   function goToLoad()    { setStep(1); }
+
+  function navToStep(n) {
+    const sc = document.getElementById(`sc-${n}`);
+    if (!sc) return;
+    // Only navigate to steps already visited (active or complete)
+    if (!sc.classList.contains("active") && !sc.classList.contains("complete")) return;
+    [null, goToLoad, goToPreview, goToFit, goToOutput][n]?.();
+  }
 
   function goToFit() {
     setStep(3);
@@ -1550,6 +1764,9 @@ const App = (function() {
   /* ── Output ────────────────────────────────────────────────────────── */
   async function goToOutput() {
     setStep(4);
+    // Pre-fill comparison label with current scan name
+    const labelInp = document.getElementById("cmp-label-inp");
+    if (labelInp && !labelInp.value) labelInp.value = _currentScanLabel;
     // Reset to ROI mode whenever we load new results
     output.setMode("roi");
     try {
@@ -1586,10 +1803,6 @@ const App = (function() {
 
   async function onBrukerZip(file) {
     if (!file) return;
-    const btn = document.querySelector(".bruker-upload-btn");
-    const origText = btn?.textContent;
-    if (btn) { btn.disabled = true; btn.textContent = "Scanning…"; }
-    // Persistent loading toast (manually removed on completion)
     const loadEl = document.createElement("div");
     loadEl.className = "toast";
     loadEl.textContent = "Scanning Bruker study — this may take a moment…";
@@ -1601,9 +1814,17 @@ const App = (function() {
       const r = await fetch(`${API}/api/load/${_sid}/bruker-study`, { method: "POST", body: fd });
       if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "Upload failed"); }
       const d = await r.json();
-      _brukerScans    = d.scans;
-      _brukerSelected = null;
-      _brukerFilter   = "all";
+      _brukerScans       = d.scans;
+      _brukerSelected    = null;
+      _brukerFilter      = "all";
+      _brukerStudyLoaded = true;
+      const zipTitle = file.name.replace(/\.zip$/i, "");
+      const reopenBtn = document.getElementById("btn-reopen-bruker");
+      if (reopenBtn) {
+        reopenBtn.textContent = `↩ Reopen ${zipTitle}`;
+        reopenBtn.title = zipTitle;
+        reopenBtn.classList.remove("hidden");
+      }
       _renderBrukerStudy();
       document.getElementById("bruker-modal").classList.remove("hidden");
       toast(`Found ${d.n_scans} scan${d.n_scans !== 1 ? "s" : ""}`, "ok");
@@ -1612,10 +1833,9 @@ const App = (function() {
       toast(e.message, "error");
     } finally {
       loadEl.remove();
-      if (btn) { btn.disabled = false; btn.textContent = origText; }
     }
-    // Reset the file input so the same zip can be re-uploaded
-    document.getElementById("inp-bruker").value = "";
+    // Reset so the same zip can be re-selected
+    document.getElementById("inp-scan").value = "";
   }
 
   function _renderBrukerStudy() {
@@ -1714,12 +1934,15 @@ const App = (function() {
 
       // Same post-processing as _uploadScan
       _scanReady = true;
+      _setModalityLock(true);
       document.getElementById("scan-file-list").innerHTML =
         d.files.map(f => `<div class="fl-item">📄 ${f}</div>`).join("");
       ortho.acqParams = d.acq_params;
       ortho.nVols     = d.n_vols;
       document.getElementById("vol-label").textContent =
         d.modality === "T1" ? "flip angle" : "TE";
+      _currentScanLabel = d.files?.[0] || `scan_${scan}`;
+      document.getElementById("btn-clear-scan").disabled = false;
       toast(`Loaded scan ${scan} · ${d.n_vols} ${d.label === "TE" ? "echoes" : "volumes"} · ${d.vox_str}`, "ok");
       await _doCheck();
     } catch(e) { toast(e.message, "error"); }
@@ -1730,6 +1953,38 @@ const App = (function() {
     document.getElementById("bruker-modal").classList.add("hidden");
   }
 
+  /* ── Comparison ────────────────────────────────────────────────────── */
+  async function saveScan() {
+    if (!_sid) { toast("No session — fit a scan first", "error"); return; }
+    const labelInp = document.getElementById("cmp-label-inp");
+    const label = labelInp?.value.trim() || _currentScanLabel;
+    try {
+      const d = await comparison.save(_sid, label);
+      toast(`"${d.label}" saved (${d.n_saved} total)`, "ok");
+      if (labelInp) labelInp.value = "";
+    } catch(e) { toast(e.message, "error"); }
+  }
+
+  async function removeCompareScan(id) {
+    if (!_sid) return;
+    await comparison.remove(_sid, id);
+  }
+
+  /* ── Reopen Bruker browser without re-uploading ─────────────────── */
+  async function reopenBrukerBrowser() {
+    if (!_sid) return;
+    try {
+      const r = await fetch(`${API}/api/load/${_sid}/bruker-scans`);
+      if (!r.ok) { toast("No Bruker study loaded", "error"); return; }
+      const d = await r.json();
+      _brukerScans    = d.scans;
+      _brukerSelected = null;
+      _brukerFilter   = "all";
+      _renderBrukerStudy();
+      document.getElementById("bruker-modal").classList.remove("hidden");
+    } catch(e) { toast(e.message, "error"); }
+  }
+
   /* ── Init ──────────────────────────────────────────────────────────── */
   setStep(1);
   setTool("T2");
@@ -1737,13 +1992,15 @@ const App = (function() {
   return {
     _sid, setTool,
     dzOver, dzLeave, dzDrop, onScanFiles, onSegFile,
+    clearScan, clearSeg,
     loadDemo,
-    goToLoad, goToPreview, goToFit, goToOutput,
+    goToLoad, goToPreview, goToFit, goToOutput, navToStep,
     runFit,
     download,
     _updateDerived,
-    ortho, output,
+    ortho, output, comparison,
     onBrukerZip, filterBruker, selectBrukerScan, closeBrukerModal,
+    saveScan, removeCompareScan, reopenBrukerBrowser,
     get _sid() { return _sid; },
   };
 })();

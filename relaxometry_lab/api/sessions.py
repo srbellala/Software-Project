@@ -16,6 +16,7 @@ class Session:
         self.tr_ms: Optional[float] = None            # for T1 VFA
         self.seg: Optional[np.ndarray] = None         # (X, Y, Z)
         self.seg_affine: Optional[np.ndarray] = None
+        self.seg_filename: Optional[str] = None
         self.input_type: Optional[str] = None         # "dicom", "nifti", or "bruker"
         self.file_names: list = []
         self.bruker_study_dir: Optional[str] = None  # path to extracted Bruker study root
@@ -33,6 +34,21 @@ class Session:
 
         # SSE progress
         self._progress_q: Optional[asyncio.Queue] = None
+
+        # Comparison slots — list of compact dicts saved via /api/fit/{sid}/save-scan
+        self.saved_scans: list = []
+
+    def reset_fit(self):
+        """Invalidate fit results — called whenever the scan or segmentation changes."""
+        self.param_map    = None
+        self.good_map     = None
+        self.r2_map       = None
+        self.chi2_map     = None
+        self.noise_map    = None
+        self.rmse_map     = None
+        self.sigma_global = None
+        self.fitting_done = False
+        self.fit_config   = None
 
 
 _sessions: dict[str, Session] = {}

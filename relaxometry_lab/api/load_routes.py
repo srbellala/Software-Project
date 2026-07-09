@@ -494,10 +494,41 @@ async def upload_seg(sid: str, file: UploadFile = File(...)):
             f"The mask must cover exactly the same voxel grid."
         )
 
-    s.seg        = seg
-    s.seg_affine = seg_affine
+    s.seg          = seg
+    s.seg_affine   = seg_affine
+    s.seg_filename = name
     labels = sorted(int(v) for v in np.unique(seg) if v != 0)
     return {"shape": list(seg.shape), "labels": labels, "filename": name}
+
+
+@router.delete("/{sid}/scan")
+async def clear_scan(sid: str):
+    """Clear the loaded scan (and any Bruker study state) so a new one can be uploaded."""
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    s.stacked          = None
+    s.affine           = None
+    s.acq_params       = None
+    s.tr_ms            = None
+    s.input_type       = None
+    s.file_names       = []
+    s.bruker_study_dir = None
+    s.reset_fit()
+    return {"cleared": True}
+
+
+@router.delete("/{sid}/segmentation")
+async def clear_segmentation(sid: str):
+    """Clear the loaded segmentation mask."""
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    s.seg          = None
+    s.seg_affine   = None
+    s.seg_filename = None
+    s.reset_fit()
+    return {"cleared": True}
 
 
 @router.get("/{sid}/check")
@@ -706,7 +737,7 @@ def _bruker_scan_info(scan_dir: str) -> dict:
 
 
 def _find_bruker_study_root(base_dir: str) -> Optional[str]:
-    """Find the directory that contains numbered Bruker scan subfolders."""
+    """BFS up to 5 levels deep to find the directory containing numbered Bruker scan subfolders."""
     def _has_numbered(d: str) -> bool:
         try:
             return any(n.isdigit() and os.path.isdir(os.path.join(d, n))
@@ -714,16 +745,23 @@ def _find_bruker_study_root(base_dir: str) -> Optional[str]:
         except OSError:
             return False
 
-    if _has_numbered(base_dir):
-        return base_dir
-    # Zip may wrap everything in one extra folder
-    try:
-        for name in os.listdir(base_dir):
-            full = os.path.join(base_dir, name)
-            if os.path.isdir(full) and _has_numbered(full):
-                return full
-    except OSError:
-        pass
+    from collections import deque
+    queue: deque = deque([(base_dir, 0)])
+    while queue:
+        current, depth = queue.popleft()
+        if _has_numbered(current):
+            return current
+        if depth >= 5:
+            continue
+        try:
+            for name in sorted(os.listdir(current)):
+                if name.startswith("__") or name.startswith("."):
+                    continue  # skip __MACOSX and hidden dirs
+                full = os.path.join(current, name)
+                if os.path.isdir(full):
+                    queue.append((full, depth + 1))
+        except OSError:
+            pass
     return None
 
 
@@ -771,7 +809,8 @@ async def upload_bruker_study(sid: str, file: UploadFile = File(...)):
 
     zip_path = os.path.join(s.dir, "study.zip")
     with open(zip_path, "wb") as fh:
-        fh.write(await file.read())
+        while chunk := await file.read(1024 * 1024):  # stream 1 MB at a time
+            fh.write(chunk)
 
     study_dir = os.path.join(s.dir, "study")
     try:
@@ -782,8 +821,13 @@ async def upload_bruker_study(sid: str, file: UploadFile = File(...)):
 
     study_root = _find_bruker_study_root(study_dir)
     if study_root is None:
-        raise HTTPException(
-            400, "No Bruker study structure found — expected numbered scan folders (1/, 2/, …)")
+        # Report top-level contents to help debug ZIP structure
+        try:
+            top = sorted(os.listdir(study_dir))[:10]
+            detail = f"No numbered scan folders found. ZIP top-level contains: {top}"
+        except OSError:
+            detail = "No Bruker study structure found — expected numbered scan folders (1/, 2/, …)"
+        raise HTTPException(400, detail)
 
     s.bruker_study_dir = study_root
 
@@ -888,6 +932,36 @@ async def select_bruker_scan(sid: str, scan: int):
         "label":      label,
         "modality":   modality,
     }
+
+
+@router.get("/{sid}/bruker-scans")
+async def list_bruker_scans(sid: str):
+    """Return the cached scan list from an already-uploaded Bruker study (no re-upload needed)."""
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if not getattr(s, "bruker_study_dir", None):
+        raise HTTPException(400, "No Bruker study uploaded yet")
+
+    study_root = s.bruker_study_dir
+    scans = []
+    for name in sorted(os.listdir(study_root), key=lambda n: (not n.isdigit(), n)):
+        if not name.isdigit():
+            continue
+        scan_path = os.path.join(study_root, name)
+        if not os.path.isdir(scan_path):
+            continue
+        try:
+            info = _bruker_scan_info(scan_path)
+            scans.append({"scan": int(name), **info})
+        except Exception as exc:
+            scans.append({
+                "scan": int(name), "title": f"Scan {name} (read error)",
+                "modality": "unknown", "method": "?",
+                "n_echo": 0, "tes": [], "flip_angle": None, "tr_ms": None,
+                "has_dicom": False, "has_nifti": False, "error": str(exc),
+            })
+    return {"scans": scans, "n_scans": len(scans)}
 
 
 @router.post("/{sid}/demo")

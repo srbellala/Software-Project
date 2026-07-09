@@ -26,22 +26,22 @@
     <!-- Step wizard indicator -->
     <div class="wizard-header" id="wizard-header">
       <div class="step-item">
-        <div class="step-circle active" id="sc-1">1</div>
+        <div class="step-circle active" id="sc-1" onclick="App.navToStep(1)">1</div>
         <span class="step-label active" id="sl-1">Load</span>
       </div>
       <div class="step-connector" id="conn-1"></div>
       <div class="step-item">
-        <div class="step-circle" id="sc-2">2</div>
+        <div class="step-circle" id="sc-2" onclick="App.navToStep(2)">2</div>
         <span class="step-label" id="sl-2">Preview</span>
       </div>
       <div class="step-connector" id="conn-2"></div>
       <div class="step-item">
-        <div class="step-circle" id="sc-3">3</div>
+        <div class="step-circle" id="sc-3" onclick="App.navToStep(3)">3</div>
         <span class="step-label" id="sl-3">Fit</span>
       </div>
       <div class="step-connector" id="conn-3"></div>
       <div class="step-item">
-        <div class="step-circle" id="sc-4">4</div>
+        <div class="step-circle" id="sc-4" onclick="App.navToStep(4)">4</div>
         <span class="step-label" id="sl-4">Output</span>
       </div>
     </div>
@@ -64,10 +64,12 @@
           <div class="load-left">
 
             <!-- Scan upload -->
-            <div class="card">
-              <div class="card-title">Scan Data</div>
+            <div class="card card--closable">
+              <button type="button" class="card-clear-btn" id="btn-clear-scan"
+                      title="Clear uploaded scan" onclick="App.clearScan()" disabled>✕</button>
+              <div class="card-title">Scan Files</div>
               <div class="card-subtitle" id="scan-hint">
-                Upload a single 4D Enhanced DICOM (.dcm) — or a folder of per-echo NIfTI files
+                Upload a 4D DICOM, a folder of per-echo NIfTI files, or a Bruker Study ZIP
               </div>
 
               <div class="dropzone" id="dz-scan"
@@ -77,26 +79,29 @@
                    onclick="document.getElementById('inp-scan').click()">
                 <div class="dz-icon">📂</div>
                 <div class="dz-label">Drop Files here or Click to Browse</div>
-                <div class="dz-hint">DICOM (.dcm) · NIfTI (.nii / .nii.gz)</div>
+                <div class="dz-hint">DICOM (.dcm) · NIfTI (.nii / .nii.gz) · Bruker Study (.zip)</div>
               </div>
-              <input type="file" id="inp-scan" multiple accept=".dcm,.nii,.nii.gz"
+              <input type="file" id="inp-scan" multiple
+                     accept=".dcm,.nii,.nii.gz,.zip,application/zip,application/x-zip-compressed,application/octet-stream"
                      style="display:none" onchange="App.onScanFiles(event)" />
 
               <div class="file-list" id="scan-file-list"></div>
 
-              <div class="dz-divider">— or —</div>
-              <button type="button" class="btn btn-ghost btn-sm bruker-upload-btn"
-                      onclick="document.getElementById('inp-bruker').click()">
-                Upload Bruker Study (ZIP)
+              <button type="button" id="btn-reopen-bruker"
+                      class="btn btn-ghost btn-sm bruker-reopen-btn hidden"
+                      onclick="App.reopenBrukerBrowser()">
+                ↩ Reopen Bruker Study Browser
               </button>
 
               <a class="load-demo-link" onclick="App.loadDemo()">↳ Load Sample Dataset</a>
             </div>
 
             <!-- Segmentation upload -->
-            <div class="card">
+            <div class="card card--closable">
+              <button type="button" class="card-clear-btn" id="btn-clear-seg"
+                      title="Clear uploaded segmentation" onclick="App.clearSeg()" disabled>✕</button>
               <div class="card-title">Segmentation Mask <span style="font-weight:400;color:var(--muted)">(Optional)</span></div>
-              <div class="card-subtitle">NIfTI Binary Mask aligned to Scan Space </div>
+              <div class="card-subtitle">NIfTI segmentation mask in the same voxel grid as your scan</div>
 
               <div class="dropzone" id="dz-seg"
                    ondragover="App.dzOver(event,'dz-seg')"
@@ -118,8 +123,8 @@
           <!-- Right column: alignment check + proceed -->
           <div class="load-right">
             <div class="card">
-              <div class="card-title">Voxel-Space Alignment</div>
-              <div class="card-subtitle">Verifies scan ↔ Mask Geometry before Fitting</div>
+              <div class="card-title">Scan–Mask Alignment</div>
+              <div class="card-subtitle">Checks that your mask covers the same voxel grid as your scan</div>
               <div class="align-box" id="align-box">
                 Load a Scan and Segmentation Mask to check Alignment.
               </div>
@@ -302,9 +307,13 @@
                 onclick="App.output.setMode('roi')">ROI Summary</button>
         <button class="out-mode-btn" id="mode-voxel"
                 onclick="App.output.setMode('voxel')">Voxel Explorer</button>
+        <button class="out-mode-btn" id="mode-compare"
+                onclick="App.output.setMode('compare')">Comparison
+          <span id="cmp-mode-badge" class="cmp-badge hidden" style="margin-left:6px;"></span>
+        </button>
       </div>
 
-      <div class="output-layout">
+      <div class="output-layout" id="output-layout">
 
         <!-- ── Map panel (always col 1) ──────────────────────── -->
         <div class="map-panel card">
@@ -402,7 +411,7 @@
               <tr><td>Std</td>   <td id="st-std">—</td></tr>
               <tr><td>P25</td>   <td id="st-p25">—</td></tr>
               <tr><td>P75</td>   <td id="st-p75">—</td></tr>
-              <tr><td>N vox</td> <td id="st-nvox">—</td></tr>
+              <tr><td>Voxels in ROI</td> <td id="st-nvox">—</td></tr>
             </tbody>
           </table>
 
@@ -419,6 +428,12 @@
           <hr class="sep" />
           <button class="btn btn-ghost btn-sm" onclick="App.goToFit()"
                   style="width:100%;justify-content:center;">← Refit</button>
+
+          <hr class="sep" />
+          <div class="card-title" style="margin-bottom:8px;">Comparison</div>
+          <button class="btn btn-ghost btn-sm"
+                  style="width:100%;justify-content:center;"
+                  onclick="App.output.setMode('compare')">Save &amp; Compare Results →</button>
         </div>
 
         <!-- ── Voxel Explorer: Signal + Residuals ──────────────── -->
@@ -447,7 +462,7 @@
             <tbody>
               <tr><td>Position</td><td id="vx-pos">—</td></tr>
               <tr><td id="vx-param-label">T2</td><td id="vx-t2">—</td></tr>
-              <tr><td>R² fit</td>  <td id="vx-r2fit">—</td></tr>
+              <tr><td>Fit quality (R²)</td>  <td id="vx-r2fit">—</td></tr>
               <tr><td>RMSE</td>    <td id="vx-rmse">—</td></tr>
             </tbody>
           </table>
@@ -457,7 +472,77 @@
                   style="width:100%;justify-content:center;">← Refit</button>
         </div>
 
-      </div>
+      </div><!-- /output-layout -->
+
+      <!-- ══════════════════════════════════════════════════════════════════
+           Comparison panel — shown when mode = 'compare'
+      ══════════════════════════════════════════════════════════════════════ -->
+      <div class="compare-panel hidden" id="out-compare-panel">
+
+        <!-- Action row -->
+        <div class="compare-action-row">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="card-title" style="margin:0;">Saved Results</span>
+            <span id="cmp-count-badge" class="cmp-badge hidden"></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <input type="text" id="cmp-label-inp" class="cmp-label-inp"
+                   placeholder="Label for current result…" />
+            <button class="btn btn-primary btn-sm" onclick="App.saveScan()">Save current result</button>
+          </div>
+        </div>
+
+        <!-- Empty state -->
+        <div class="cmp-empty" id="cmp-empty">
+          <div class="cmp-empty-icon">📊</div>
+          <div class="cmp-empty-title">No results saved yet</div>
+          <div class="cmp-empty-sub">
+            Fit a scan, then type a label above and click "Save current result".<br>
+            Go back to Load, pick a different scan from the same Bruker study, fit it, and save again.<br>
+            All saved results appear here for side-by-side comparison.
+          </div>
+        </div>
+
+        <!-- Populated state -->
+        <div id="cmp-content" class="hidden">
+
+          <!-- Stats table -->
+          <div class="card cmp-table-card">
+            <table class="cmp-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Scan</th>
+                  <th>Type</th>
+                  <th class="cmp-th-r">Median (ms)</th>
+                  <th class="cmp-th-r">Mean (ms)</th>
+                  <th class="cmp-th-r">Std (ms)</th>
+                  <th class="cmp-th-r">P25 (ms)</th>
+                  <th class="cmp-th-r">P75 (ms)</th>
+                  <th class="cmp-th-r">Voxels</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="cmp-tbody"></tbody>
+            </table>
+          </div>
+
+          <!-- Charts -->
+          <div class="cmp-charts-grid">
+            <div class="card">
+              <div class="card-title" style="margin-bottom:6px;">Distribution Overlay</div>
+              <div id="cmp-hist" class="cmp-chart-div"></div>
+            </div>
+            <div class="card">
+              <div class="card-title" style="margin-bottom:6px;">Signal Decay Overlay</div>
+              <div id="cmp-decay" class="cmp-chart-div"></div>
+            </div>
+          </div>
+
+        </div><!-- /cmp-content -->
+
+      </div><!-- /out-compare-panel -->
+
     </div><!-- /step-output -->
 
   </div><!-- /main-content -->
@@ -489,7 +574,7 @@
             <th>#</th>
             <th>Title</th>
             <th>Modality</th>
-            <th>Echoes&nbsp;/ TEs (ms)</th>
+            <th>Echoes / TEs · Flip Angle</th>
             <th>Files</th>
           </tr>
         </thead>
@@ -505,9 +590,6 @@
 
   </div>
 </div>
-
-<input type="file" id="inp-bruker" accept=".zip" style="display:none"
-       onchange="App.onBrukerZip(this.files[0])"/>
 
 <script src="/static/app.js"></script>
 </body>
