@@ -1,0 +1,99 @@
+
+NAVBAR
+------
+[nav.brand]      Relaxometry Lab
+[nav.openTool]   Open Tool
+
+
+HERO SECTION
+------------
+[hero.badge]         Open Source · Browser-Based · No Install Required
+[hero.title]         Relaxometry Lab
+[hero.subtitle]      MRI T2 and T1 relaxometry fitting for preclinical data — directly in your browser.
+                      (Note: the "2" and "1" render as subscript on the page.)
+[hero.primaryCta]    Open T2 / T1 Tool →
+[hero.secondaryCta]  Try with Sample Data
+
+
+TOOLS SECTION
+-------------
+[tools.eyebrow]   Tools
+[tools.title]     What can you fit?
+[tools.subtitle]  Upload DICOM, NIfTI, or a Bruker study ZIP — the tool handles the rest.
+
+  Card 1 — T2 Relaxometry
+  [title]  T2 Relaxometry
+  [desc]   Mono-exponential T2 mapping from multi-echo spin-echo data. Voxel-by-voxel curve fitting with quality-filtered output maps.
+  [tags]   MSME, CPMG, Multi-Echo
+
+  Card 2 — T1 Relaxometry
+  [title]  T1 Relaxometry
+  [desc]   Variable flip angle T1 mapping from spoiled gradient echo data. Supports single-TR VFA with Ernst angle fitting.
+  [tags]   VFA, FLASH, SPGR
+
+  Card 3 — T2* / R2* Mapping (marked "Coming Soon")
+  [title]  T2* / R2* Mapping
+  [desc]   Multi-echo gradient echo T2* fitting with optional B0 field correction and fat/water separation.
+  [tags]   MGE, GRE, mGRE
+
+
+WORKFLOW SECTION ("Four steps from data to result")
+----------------------------------------------------
+[workflow.eyebrow]   Workflow
+[workflow.title]     Four steps from data to result
+[workflow.subtitle]  No scripts. No command line. Works with DICOM, NIfTI, and raw Bruker exports.
+
+  Step 1 — Load Data
+  Upload DICOM, NIfTI, or a Bruker study ZIP. Optionally add a segmentation mask.
+
+  Step 2 — Preview
+  Browse your scan in 3-plane orthographic view, scroll slices, zoom, and verify alignment.
+
+  Step 3 — Fit
+  Run voxel-wise curve fitting. Explore individual decay curves and ROI statistics.
+
+  Step 4 — Export
+  Download NIfTI maps, CSV statistics, a multi-page PDF report, or raw NumPy arrays.
+
+
+DATA FORMATS SECTION
+---------------------
+[dataFormats.eyebrow]   Data Formats
+[dataFormats.title]     Supported inputs
+[dataFormats.subtitle]  Bring your data in any of these formats — no preprocessing needed.
+
+  Card 1 — DICOM
+  [desc]  Single enhanced multi-frame DICOM or a stack of per-slice single-frame files. Echo time read from standard tags.
+  [tags]  .dcm
+
+  Card 2 — NIfTI
+  [desc]  One file per echo (3D) or a single 4D volume. Echo times read from BIDS sidecar JSON when present.
+  [tags]  .nii, .nii.gz
+
+  Card 3 — Bruker Study ZIP
+  [desc]  Zip a Bruker ParaVision study folder and upload it directly. Browse all scans, pick one, and load with a click.
+  [tags]  .zip, ParaVision
+
+
+RESOURCES SECTION
+-----------------
+[resources.eyebrow]   Resources
+[resources.title]     Get started quickly
+[resources.subtitle]  Sample data, documentation, and source code.
+
+  Card 1 — Sample Dataset
+  [desc]  Load a synthetic multi-echo T2 dataset directly in the tool — no file needed.
+
+  Card 2 — GitHub
+  [desc]  Source code, issue tracker, and contribution guide.
+
+  Card 3 — Documentation
+  [desc]  File format requirements, fitting model details, and export format descriptions.
+
+  Card 4 — Report an Issue
+  [desc]  Found a bug or have a feature request? Open an issue on GitHub.
+
+
+FOOTER
+------
+[footer]  Relaxometry Lab · Open source MRI analysis · Built with FastAPI + React
