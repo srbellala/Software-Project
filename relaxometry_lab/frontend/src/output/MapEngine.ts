@@ -52,6 +52,10 @@ export class MapEngine {
   private result: MapEngineResult | null = null;
   private selected: { x: number; y: number } | null = null;
   private dragState: { startX: number; startY: number; startPanX: number; startPanY: number } | null = null;
+  /** Accumulated scroll distance since the last slice step — trackpads fire many
+   *  tiny wheel events per swipe, so we require a deliberate amount of scroll
+   *  before advancing a slice, instead of stepping on every DOM event. */
+  private sliceScrollAccum = 0;
 
   private _onWheel = (e: WheelEvent) => this.handleWheel(e);
   private _onMouseDown = (e: MouseEvent) => this.handleMouseDown(e);
@@ -216,7 +220,14 @@ export class MapEngine {
       this.render(this.selected);
       return;
     }
-    this.onSliceWheel?.(e.deltaY > 0 ? 1 : -1);
+
+    const SLICE_SCROLL_THRESHOLD = 60;
+    this.sliceScrollAccum += e.deltaY;
+    while (Math.abs(this.sliceScrollAccum) >= SLICE_SCROLL_THRESHOLD) {
+      const dir = this.sliceScrollAccum > 0 ? 1 : -1;
+      this.onSliceWheel?.(dir);
+      this.sliceScrollAccum -= dir * SLICE_SCROLL_THRESHOLD;
+    }
   }
 
   /** Set by the React wrapper: called with +1/-1 when the user scrolls the map without Ctrl/Cmd held. */

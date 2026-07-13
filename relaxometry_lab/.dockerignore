@@ -1,0 +1,19 @@
+# Frontend build artifacts — rebuilt fresh inside the image
+frontend/node_modules
+frontend/dist
+
+# Python
+__pycache__
+**/__pycache__
+*.pyc
+.MouseAnalysis
+
+# VCS / editor
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# Local dev scratch
+*.log

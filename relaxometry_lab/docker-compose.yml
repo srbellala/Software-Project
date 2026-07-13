@@ -1,0 +1,7 @@
+services:
+  relaxometry-lab:
+    build: .
+    image: relaxometry-lab:latest
+    ports:
+      - "8001:8001"
+    restart: unless-stopped

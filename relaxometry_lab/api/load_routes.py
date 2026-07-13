@@ -9,12 +9,66 @@ from pathlib import Path
 from typing import List, Optional
 import numpy as np
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from api.sessions import Session, create_session, get_session
 
 router = APIRouter()
+
+
+# ── GCS-backed uploads (used only when deployed with UPLOAD_BUCKET set) ───────
+#
+# Cloud Run's front end hard-caps request bodies at 32MB, which multi-echo
+# NIfTI stacks routinely exceed. When UPLOAD_BUCKET is set, the frontend
+# uploads files directly to that bucket via a signed URL, then hands us the
+# object paths to fetch — the file never passes through the container's
+# 32MB-limited request path. Locally (no UPLOAD_BUCKET), uploads still go
+# straight through the /scan, /segmentation, /bruker-study bodies below.
+
+_gcs_client = None
+
+
+def _upload_bucket() -> Optional[str]:
+    return os.environ.get("UPLOAD_BUCKET")
+
+
+def _gcs():
+    global _gcs_client
+    if _gcs_client is None:
+        from google.cloud import storage
+        _gcs_client = storage.Client()
+    return _gcs_client
+
+
+def _gcs_signed_put_url(bucket_name: str, object_path: str) -> str:
+    import datetime
+    import google.auth
+    from google.auth.transport import requests as gauth_requests
+
+    credentials, _ = google.auth.default()
+    credentials.refresh(gauth_requests.Request())
+
+    blob = _gcs().bucket(bucket_name).blob(object_path)
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=20),
+        method="PUT",
+        content_type="application/octet-stream",
+        service_account_email=credentials.service_account_email,
+        access_token=credentials.token,
+    )
+
+
+def _download_from_gcs(bucket_name: str, object_path: str, dest: str):
+    _gcs().bucket(bucket_name).blob(object_path).download_to_filename(dest)
+
+
+def _delete_from_gcs(bucket_name: str, object_path: str):
+    try:
+        _gcs().bucket(bucket_name).blob(object_path).delete()
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────── helpers ──────────────────────
@@ -405,23 +459,33 @@ async def new_session(modality: str = "T2"):
     return {"session_id": s.id}
 
 
-@router.post("/{sid}/scan")
-async def upload_scan(sid: str, files: List[UploadFile] = File(...)):
+@router.get("/config")
+async def load_config():
+    return {"gcs_enabled": bool(_upload_bucket())}
+
+
+@router.post("/{sid}/upload-url")
+async def get_upload_url(sid: str, purpose: str, filename: str):
     s = get_session(sid)
     if not s:
         raise HTTPException(404, "Session not found")
+    bucket_name = _upload_bucket()
+    if not bucket_name:
+        raise HTTPException(400, "GCS uploads are not enabled on this server")
+    if purpose not in ("scan", "segmentation", "bruker-study"):
+        raise HTTPException(400, "Invalid purpose")
 
-    scan_dir = os.path.join(s.dir, "scan")
-    os.makedirs(scan_dir, exist_ok=True)
+    import uuid as uuid_mod
 
-    saved = []
-    for f in files:
-        name = os.path.basename(f.filename or f"file_{len(saved)}")
-        dest = os.path.join(scan_dir, name)
-        with open(dest, "wb") as fh:
-            fh.write(await f.read())
-        saved.append(dest)
+    object_path = f"uploads/{sid}/{purpose}/{uuid_mod.uuid4().hex}/{os.path.basename(filename)}"
+    try:
+        url = _gcs_signed_put_url(bucket_name, object_path)
+    except Exception as e:
+        raise HTTPException(500, f"Could not create upload URL: {e}")
+    return {"url": url, "object_path": object_path}
 
+
+def _process_scan_files(s: Session, saved: List[str]) -> dict:
     if not saved:
         raise HTTPException(400, "No files received")
 
@@ -467,18 +531,58 @@ async def upload_scan(sid: str, files: List[UploadFile] = File(...)):
     }
 
 
-@router.post("/{sid}/segmentation")
-async def upload_seg(sid: str, file: UploadFile = File(...)):
-    import nibabel as nib
+@router.post("/{sid}/scan")
+async def upload_scan(sid: str, files: List[UploadFile] = File(...)):
     s = get_session(sid)
     if not s:
         raise HTTPException(404, "Session not found")
 
-    name = os.path.basename(file.filename or "seg.nii")
-    dest = os.path.join(s.dir, name)
-    with open(dest, "wb") as fh:
-        fh.write(await file.read())
+    scan_dir = os.path.join(s.dir, "scan")
+    os.makedirs(scan_dir, exist_ok=True)
 
+    saved = []
+    for f in files:
+        name = os.path.basename(f.filename or f"file_{len(saved)}")
+        dest = os.path.join(scan_dir, name)
+        with open(dest, "wb") as fh:
+            fh.write(await f.read())
+        saved.append(dest)
+
+    return _process_scan_files(s, saved)
+
+
+@router.post("/{sid}/scan-from-gcs")
+async def scan_from_gcs(sid: str, payload: dict = Body(...)):
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    bucket_name = _upload_bucket()
+    if not bucket_name:
+        raise HTTPException(400, "GCS uploads are not enabled on this server")
+
+    object_paths = payload.get("object_paths") or []
+    scan_dir = os.path.join(s.dir, "scan")
+    os.makedirs(scan_dir, exist_ok=True)
+
+    saved = []
+    for object_path in object_paths:
+        dest = os.path.join(scan_dir, os.path.basename(object_path))
+        try:
+            _download_from_gcs(bucket_name, object_path, dest)
+        except Exception as e:
+            raise HTTPException(400, f"Failed to fetch uploaded file: {e}")
+        saved.append(dest)
+
+    result = _process_scan_files(s, saved)
+    for object_path in object_paths:
+        _delete_from_gcs(bucket_name, object_path)
+    return result
+
+
+def _process_segmentation_file(s: Session, dest: str) -> dict:
+    import nibabel as nib
+
+    name = os.path.basename(dest)
     try:
         img = nib.load(dest)
         seg = np.asarray(img.get_fdata()).astype(np.int32)   # matches explorer
@@ -499,6 +603,44 @@ async def upload_seg(sid: str, file: UploadFile = File(...)):
     s.seg_filename = name
     labels = sorted(int(v) for v in np.unique(seg) if v != 0)
     return {"shape": list(seg.shape), "labels": labels, "filename": name}
+
+
+@router.post("/{sid}/segmentation")
+async def upload_seg(sid: str, file: UploadFile = File(...)):
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+
+    name = os.path.basename(file.filename or "seg.nii")
+    dest = os.path.join(s.dir, name)
+    with open(dest, "wb") as fh:
+        fh.write(await file.read())
+
+    return _process_segmentation_file(s, dest)
+
+
+@router.post("/{sid}/segmentation-from-gcs")
+async def segmentation_from_gcs(sid: str, payload: dict = Body(...)):
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    bucket_name = _upload_bucket()
+    if not bucket_name:
+        raise HTTPException(400, "GCS uploads are not enabled on this server")
+
+    object_path = payload.get("object_path")
+    if not object_path:
+        raise HTTPException(400, "Missing object_path")
+
+    dest = os.path.join(s.dir, os.path.basename(object_path))
+    try:
+        _download_from_gcs(bucket_name, object_path, dest)
+    except Exception as e:
+        raise HTTPException(400, f"Failed to fetch uploaded file: {e}")
+
+    result = _process_segmentation_file(s, dest)
+    _delete_from_gcs(bucket_name, object_path)
+    return result
 
 
 @router.delete("/{sid}/scan")
@@ -799,18 +941,9 @@ def _load_dicom_series_multifile(paths: list) -> tuple:
     return vol, _simple_dicom_affine(pydicom.dcmread(frames[0]["path"])), np.array(unique_tes)
 
 
-@router.post("/{sid}/bruker-study")
-async def upload_bruker_study(sid: str, file: UploadFile = File(...)):
-    """Upload a zipped Bruker study folder; returns a list of all scans with metadata."""
+def _process_bruker_zip(s: Session, zip_path: str) -> dict:
+    """Extract an uploaded zipped Bruker study folder; return a list of all scans with metadata."""
     import zipfile
-    s = get_session(sid)
-    if not s:
-        raise HTTPException(404, "Session not found")
-
-    zip_path = os.path.join(s.dir, "study.zip")
-    with open(zip_path, "wb") as fh:
-        while chunk := await file.read(1024 * 1024):  # stream 1 MB at a time
-            fh.write(chunk)
 
     study_dir = os.path.join(s.dir, "study")
     try:
@@ -854,6 +987,45 @@ async def upload_bruker_study(sid: str, file: UploadFile = File(...)):
         raise HTTPException(400, "No scan folders found in study")
 
     return {"scans": scans, "n_scans": len(scans)}
+
+
+@router.post("/{sid}/bruker-study")
+async def upload_bruker_study(sid: str, file: UploadFile = File(...)):
+    """Upload a zipped Bruker study folder; returns a list of all scans with metadata."""
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+
+    zip_path = os.path.join(s.dir, "study.zip")
+    with open(zip_path, "wb") as fh:
+        while chunk := await file.read(1024 * 1024):  # stream 1 MB at a time
+            fh.write(chunk)
+
+    return _process_bruker_zip(s, zip_path)
+
+
+@router.post("/{sid}/bruker-study-from-gcs")
+async def bruker_study_from_gcs(sid: str, payload: dict = Body(...)):
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    bucket_name = _upload_bucket()
+    if not bucket_name:
+        raise HTTPException(400, "GCS uploads are not enabled on this server")
+
+    object_path = payload.get("object_path")
+    if not object_path:
+        raise HTTPException(400, "Missing object_path")
+
+    zip_path = os.path.join(s.dir, "study.zip")
+    try:
+        _download_from_gcs(bucket_name, object_path, zip_path)
+    except Exception as e:
+        raise HTTPException(400, f"Failed to fetch uploaded file: {e}")
+
+    result = _process_bruker_zip(s, zip_path)
+    _delete_from_gcs(bucket_name, object_path)
+    return result
 
 
 @router.post("/{sid}/bruker-select")

@@ -36,6 +36,7 @@ export function MapPanel({
 }: MapPanelProps) {
   const mapCanvasRef = useRef<HTMLCanvasElement>(null);
   const colorbarRef = useRef<HTMLCanvasElement>(null);
+  const sliceWheelDebounceRef = useRef<number | null>(null);
   const [sliceVal, setSliceVal] = useState(0);
   const [overlayAlpha, setOverlayAlphaState] = useState(0.75);
   const [t2Min, setT2Min] = useState(0);
@@ -50,12 +51,18 @@ export function MapPanel({
     engine.mount({ mapCanvas: mapCanvasRef.current, colorbarCanvas: colorbarRef.current });
     engine.onSliceWheel = (delta) => {
       const el = document.getElementById("map-slice-slider") as HTMLInputElement | null;
-      const cur = el ? Number(el.value) : 0;
       const max = el ? Number(el.max) : 0;
-      const next = Math.max(0, Math.min(max, cur + delta));
-      onSliceChange(next);
+      setSliceVal((cur) => {
+        const next = Math.max(0, Math.min(max, cur + delta));
+        if (sliceWheelDebounceRef.current) window.clearTimeout(sliceWheelDebounceRef.current);
+        sliceWheelDebounceRef.current = window.setTimeout(() => onSliceChange(next), 80);
+        return next;
+      });
     };
-    return () => engine.unmount();
+    return () => {
+      if (sliceWheelDebounceRef.current) window.clearTimeout(sliceWheelDebounceRef.current);
+      engine.unmount();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

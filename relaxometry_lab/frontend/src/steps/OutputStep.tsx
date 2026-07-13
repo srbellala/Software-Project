@@ -18,6 +18,7 @@ export function OutputStep() {
   const setStep = useAppStore((s) => s.setStep);
 
   const engineRef = useRef(new MapEngine());
+  const sliceRequestIdRef = useRef(0);
   const [mode, setMode] = useState<Mode>("roi");
   const [result, setResult] = useState<FitResult | null>(null);
   const [useAll, setUseAll] = useState(false);
@@ -45,7 +46,9 @@ export function OutputStep() {
 
   function fetchSlice(z: number, ignoreThresh: boolean) {
     if (!sid) return;
+    const reqId = ++sliceRequestIdRef.current;
     outputApi.fetchResult(sid, z, ignoreThresh).then((res) => {
+      if (reqId !== sliceRequestIdRef.current) return; // superseded by a newer slice request
       setResult(res);
       engineRef.current.updateResult(res);
     });
