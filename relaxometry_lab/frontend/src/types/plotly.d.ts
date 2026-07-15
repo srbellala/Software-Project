@@ -16,6 +16,7 @@ interface PlotlyHTMLElement extends HTMLDivElement {
 interface PlotlyStatic {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   react(el: HTMLElement | string, data: any[], layout?: any, config?: any): Promise<void>;
+  purge(el: HTMLElement | string): void;
   Plots: {
     resize(el: HTMLElement | string): void;
   };

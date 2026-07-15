@@ -16,14 +16,20 @@ export function VoxelSidebar({ scatter, selected, voxelData, label, onSelectVoxe
   const traces = useMemo(() => {
     if (!scatter?.voxels?.length) return [];
     const voxels = scatter.voxels;
-    const good = voxels.filter((v) => (v.r2_fit ?? 1) >= 0.5);
-    const poor = voxels.filter((v) => (v.r2_fit ?? 1) < 0.5);
-    const mkGood = (pts: typeof voxels) => ({
-      x: pts.map((p) => voxels.indexOf(p)),
-      y: pts.map((v) => v.t2),
+    // Attach each voxel's position in the full array up front — looking it
+    // back up per-point via voxels.indexOf(p) below is O(n) per point (O(n²)
+    // total), which is fine for the small demo dataset but can take many
+    // seconds and freeze the tab on a real scan with tens of thousands of
+    // ROI voxels.
+    const indexed = voxels.map((v, i) => ({ v, i }));
+    const good = indexed.filter(({ v }) => (v.r2_fit ?? 1) >= 0.5);
+    const poor = indexed.filter(({ v }) => (v.r2_fit ?? 1) < 0.5);
+    const mkGood = (pts: typeof indexed) => ({
+      x: pts.map(({ i }) => i),
+      y: pts.map(({ v }) => v.t2),
       mode: "markers",
       marker: { color: "rgba(35,74,110,0.65)", size: 4 },
-      customdata: pts,
+      customdata: pts.map(({ v }) => v),
       hovertemplate: `%{y:.1f} ms<extra></extra>`,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -53,6 +53,18 @@ export function PlotlyChart({ data, layout, className, onPointClick }: PlotlyCha
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, layout, ready]);
 
+  // Plotly attaches its own internal state (incl. WebGL contexts, event
+  // listeners) to the div — React unmounting the div doesn't release any of
+  // that. Without an explicit purge, switching between Output modes leaks a
+  // chart's worth of resources every time, and browsers cap live WebGL
+  // contexts (~8-16), so repeated switching eventually stalls the whole page.
+  useEffect(() => {
+    const el = ref.current;
+    return () => {
+      if (el) Plotly.purge(el);
+    };
+  }, []);
+
   return (
     <div ref={ref} className={className}>
       {!ready && <div className="flex h-full w-full items-center justify-center text-xs text-muted">Loading chart…</div>}
