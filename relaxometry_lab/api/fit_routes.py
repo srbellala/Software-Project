@@ -162,6 +162,8 @@ def _fit_t1_voxel(signal, alphas_deg, tr_ms):
 # ─────────────────────────────────────────────── async fit runner ─────────────
 
 async def _run_fit(s, req):
+    from api.fit_engine import fit_t2_batch, fit_t1_batch
+
     q = s._progress_q
     stacked = s.stacked
     X, Y, Z, nVol = stacked.shape
@@ -200,55 +202,47 @@ async def _run_fit(s, req):
     noise_map  = np.full((X, Y, Z), np.nan, dtype=np.float32)
     rmse_map   = np.full((X, Y, Z), np.nan, dtype=np.float32)
 
-    sigma = s.sigma_global
-    batch = max(1, total // 200)
+    await q.put({"status": "progress", "pct": 5, "done": 0, "total": total})
+    await asyncio.sleep(0)
+
+    # Whole-volume vectorized fit (VARPRO) — replaces the old one-curve_fit-per-
+    # voxel loop. See api/fit_engine.py for why this is dramatically faster.
+    Yvol = stacked[xs, ys, zs, :].astype(np.float64)   # (total, nVol)
 
     if modality == "T2":
         TE_s = s.acq_params / 1000.0          # ms → seconds (critical)
+        res = fit_t2_batch(Yvol, TE_s, s.sigma_global, up)
 
-        for i, (xi, yi, zi) in enumerate(zip(xs, ys, zs)):
-            sig = stacked[xi, yi, zi, :].astype(float)
-            res = _fit_t2_voxel(sig, TE_s, sigma, cfg=up)
+        await q.put({"status": "progress", "pct": 90, "done": total, "total": total})
+        await asyncio.sleep(0)
 
-            if res is not None:
-                t2 = res["t2"]
-                rmse_map[xi, yi, zi]  = res["rmse"]
-                r2fit_map[xi, yi, zi] = res["r2_fit"]
-                chi2_map[xi, yi, zi]  = res["chi2"]
-                noise_map[xi, yi, zi] = res["noise"]
-                if thresh_lo < t2 < thresh_hi:
-                    param_map[xi, yi, zi] = t2
-                    if np.isfinite(res["r2_fit"]) and res["r2_fit"] >= r2_thresh:
-                        good_map[xi, yi, zi] = t2
+        t2 = res["t2"]
+        rmse_map[xs, ys, zs]  = res["rmse"]
+        r2fit_map[xs, ys, zs] = res["r2_fit"]
+        chi2_map[xs, ys, zs]  = res["chi2"]
+        noise_map[xs, ys, zs] = res["noise"]
 
-            if i % batch == 0 or i == total - 1:
-                pct = int(100 * (i + 1) / total)
-                await q.put({"status": "progress", "pct": pct,
-                             "done": i + 1, "total": total})
-                await asyncio.sleep(0)
+        within = np.isfinite(t2) & (t2 > thresh_lo) & (t2 < thresh_hi)
+        param_map[xs[within], ys[within], zs[within]] = t2[within]
+        good = within & np.isfinite(res["r2_fit"]) & (res["r2_fit"] >= r2_thresh)
+        good_map[xs[good], ys[good], zs[good]] = t2[good]
 
     else:  # T1 VFA
         tr = req.tr_ms or s.tr_ms or 15.0
         s.tr_ms = tr
+        res = fit_t1_batch(Yvol, s.acq_params, tr)
 
-        for i, (xi, yi, zi) in enumerate(zip(xs, ys, zs)):
-            sig = stacked[xi, yi, zi, :].astype(float)
-            res = _fit_t1_voxel(sig, s.acq_params, tr)
+        await q.put({"status": "progress", "pct": 90, "done": total, "total": total})
+        await asyncio.sleep(0)
 
-            if res is not None:
-                t1 = res["t1"]
-                rmse_map[xi, yi, zi]  = res["rmse"]
-                r2fit_map[xi, yi, zi] = res["r2_fit"]
-                if 10.0 < t1 < 5000.0:
-                    param_map[xi, yi, zi] = t1
-                    if np.isfinite(res["r2_fit"]) and res["r2_fit"] >= r2_thresh:
-                        good_map[xi, yi, zi] = t1
+        t1 = res["t1"]
+        rmse_map[xs, ys, zs]  = res["rmse"]
+        r2fit_map[xs, ys, zs] = res["r2_fit"]
 
-            if i % batch == 0 or i == total - 1:
-                pct = int(100 * (i + 1) / total)
-                await q.put({"status": "progress", "pct": pct,
-                             "done": i + 1, "total": total})
-                await asyncio.sleep(0)
+        within = np.isfinite(t1) & (t1 > 10.0) & (t1 < 5000.0)
+        param_map[xs[within], ys[within], zs[within]] = t1[within]
+        good = within & np.isfinite(res["r2_fit"]) & (res["r2_fit"] >= r2_thresh)
+        good_map[xs[good], ys[good], zs[good]] = t1[good]
 
     s.param_map    = param_map     # all valid T2/T1 within threshold
     s.good_map     = good_map      # quality-filtered (fit-R² ≥ 0.5)
