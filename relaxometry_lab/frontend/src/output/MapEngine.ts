@@ -61,6 +61,7 @@ export class MapEngine {
   private _onMouseDown = (e: MouseEvent) => this.handleMouseDown(e);
   private _onMouseMove = (e: MouseEvent) => this.handleMouseMove(e);
   private _onMouseUp = () => this.handleMouseUp();
+  private _resizeObserver: ResizeObserver | null = null;
 
   mount(refs: MapRefs) {
     this.refs = refs;
@@ -68,6 +69,16 @@ export class MapEngine {
     refs.mapCanvas.addEventListener("mousedown", this._onMouseDown);
     document.addEventListener("mousemove", this._onMouseMove);
     document.addEventListener("mouseup", this._onMouseUp);
+
+    // The canvas's backing size is only recomputed inside render(), driven by
+    // its CSS width at that moment — nothing re-triggers it if the container
+    // resizes afterward (browser resize, sidebar reflow, etc.), leaving the
+    // canvas undersized with the dark parent's background showing through as
+    // a black gap. Re-render on actual size changes to keep it in sync.
+    this._resizeObserver = new ResizeObserver(() => {
+      if (this.result) this.render(this.selected);
+    });
+    this._resizeObserver.observe(refs.mapCanvas.parentElement ?? refs.mapCanvas);
   }
 
   unmount() {
@@ -77,6 +88,8 @@ export class MapEngine {
     }
     document.removeEventListener("mousemove", this._onMouseMove);
     document.removeEventListener("mouseup", this._onMouseUp);
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
     this.refs = null;
   }
 
@@ -323,7 +336,11 @@ export class MapEngine {
     tCtx.putImageData(idata, 0, 0);
 
     const dpr = window.devicePixelRatio || 1;
-    const cssW = cv.clientWidth || dispCols;
+    // Read available width from the parent, not the canvas itself — the
+    // canvas's own CSS box is pinned by the inline style.width we set below,
+    // so cv.clientWidth would just echo back whatever we last set it to and
+    // could never grow again even if the parent container gets wider later.
+    const cssW = cv.parentElement?.clientWidth || cv.clientWidth || dispCols;
     const cssH = Math.round((cssW * dispRows) / dispCols);
     const bW = Math.round(cssW * dpr);
     const bH = Math.round(cssH * dpr);

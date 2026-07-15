@@ -47,6 +47,7 @@ export class OrthoEngine {
   private _onMouseMove = (e: MouseEvent) => this._handleViewMouseMove(e);
   private _onMouseUp = () => this._handleViewMouseUp();
   private _viewListeners: Partial<Record<ViewName, { click: (e: MouseEvent) => void; down: (e: MouseEvent) => void; wheel: (e: WheelEvent) => void }>> = {};
+  private _resizeObserver: ResizeObserver | null = null;
 
   mount(refs: OrthoRefs) {
     this._refs = refs;
@@ -64,6 +65,16 @@ export class OrthoEngine {
     }
     document.addEventListener("mousemove", this._onMouseMove);
     document.addEventListener("mouseup", this._onMouseUp);
+
+    // Same fix as MapEngine: canvas backing size is only recomputed inside
+    // render(), driven by container width at that moment — without this,
+    // a later container resize leaves the canvas undersized with the dark
+    // parent's background showing through as a black gap.
+    this._resizeObserver = new ResizeObserver(() => this.render());
+    for (const view of Object.keys(refs.canvases) as ViewName[]) {
+      const wrap = refs.canvases[view].parentElement;
+      if (wrap) this._resizeObserver.observe(wrap);
+    }
   }
 
   unmount() {
@@ -80,6 +91,8 @@ export class OrthoEngine {
     }
     document.removeEventListener("mousemove", this._onMouseMove);
     document.removeEventListener("mouseup", this._onMouseUp);
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
     this._refs = null;
   }
 
