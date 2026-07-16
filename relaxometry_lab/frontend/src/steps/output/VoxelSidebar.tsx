@@ -24,9 +24,16 @@ export function VoxelSidebar({ scatter, selected, voxelData, label, onSelectVoxe
     const indexed = voxels.map((v, i) => ({ v, i }));
     const good = indexed.filter(({ v }) => (v.r2_fit ?? 1) >= 0.5);
     const poor = indexed.filter(({ v }) => (v.r2_fit ?? 1) < 0.5);
+    // WebGL-rendered ("scattergl"), not the SVG-based default ("scatter") —
+    // a real scan's ROI can have 100k+ voxels, and SVG mode creates one DOM
+    // element per point. At that scale the resulting DOM tree bogs down the
+    // whole page's layout/paint/event handling, not just the chart itself
+    // (visible as delayed clicks and general lag anywhere on the Output
+    // screen). scattergl draws everything on a single canvas instead.
     const mkGood = (pts: typeof indexed) => ({
       x: pts.map(({ i }) => i),
       y: pts.map(({ v }) => v.t2),
+      type: "scattergl",
       mode: "markers",
       marker: { color: "rgba(35,74,110,0.65)", size: 4 },
       customdata: pts.map(({ v }) => v),
@@ -43,6 +50,7 @@ export function VoxelSidebar({ scatter, selected, voxelData, label, onSelectVoxe
         t.push({
           x: [si],
           y: [voxels[si].t2],
+          type: "scattergl",
           mode: "markers",
           marker: { color: "rgba(210,40,40,0.9)", size: 10, symbol: "circle", line: { color: "#fff", width: 1.5 } },
           hovertemplate: `%{y:.1f} ms<extra>Selected</extra>`,
