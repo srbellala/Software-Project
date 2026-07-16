@@ -56,15 +56,18 @@ def _roi_stats(s) -> dict:
 
 @router.get("/{sid}/map.nii.gz")
 async def download_map(sid: str):
-    import nibabel as nib, gzip
+    import nibabel as nib, gzip, tempfile
     s = _require_fit(sid)
     img = nib.Nifti1Image(s.param_map, s.affine if s.affine is not None else np.eye(4))
-    buf = io.BytesIO()
-    nib.save(img, buf)
-    buf.seek(0)
+    # nib.save() needs a real filesystem path, not a BytesIO — it calls
+    # pathlib.Path(filename) internally, which raises TypeError on a buffer.
+    with tempfile.NamedTemporaryFile(suffix=".nii") as tmp:
+        nib.save(img, tmp.name)
+        tmp.seek(0)
+        raw = tmp.read()
     gz_buf = io.BytesIO()
     with gzip.GzipFile(fileobj=gz_buf, mode="wb") as gz:
-        gz.write(buf.read())
+        gz.write(raw)
     fname = f"{s.modality.lower()}_map.nii.gz"
     return Response(content=gz_buf.getvalue(), media_type="application/gzip",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
