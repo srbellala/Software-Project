@@ -37,7 +37,10 @@ export async function uploadScan(files: File[]) {
   try {
     const sid = await ensureSession();
     toast("Uploading scan…");
-    const d = await api.uploadScan(sid, files);
+    useAppStore.getState().setScanUploadProgress(0);
+    const d = await api.uploadScan(sid, files, (loaded, total) => {
+      useAppStore.getState().setScanUploadProgress(total > 0 ? Math.round((loaded / total) * 100) : 0);
+    });
     applyScanResult(
       d,
       d.files.map((f) => ({ icon: "📄", label: f }))
@@ -46,6 +49,8 @@ export async function uploadScan(files: File[]) {
     await doCheck();
   } catch (e) {
     toast((e as Error).message, "error");
+  } finally {
+    useAppStore.getState().setScanUploadProgress(null);
   }
 }
 
@@ -116,9 +121,12 @@ export async function loadDemo() {
 
 export async function uploadBrukerZip(file: File) {
   try {
-    toast("Scanning Bruker study — this may take a moment…");
+    toast("Uploading Bruker study…");
     const sid = await ensureSession();
-    const d = await api.uploadBrukerStudy(sid, file);
+    useAppStore.getState().setScanUploadProgress(0);
+    const d = await api.uploadBrukerStudy(sid, file, (loaded, total) => {
+      useAppStore.getState().setScanUploadProgress(total > 0 ? Math.round((loaded / total) * 100) : 0);
+    });
     useBrukerStore.getState().setScans(d.scans);
     useBrukerStore.getState().setFilter("all");
     useAppStore.getState().setBrukerStudyLoaded(true);
@@ -127,6 +135,8 @@ export async function uploadBrukerZip(file: File) {
     toast(`Found ${d.n_scans} scan${d.n_scans !== 1 ? "s" : ""}`, "ok");
   } catch (e) {
     toast((e as Error).message, "error");
+  } finally {
+    useAppStore.getState().setScanUploadProgress(null);
   }
 }
 

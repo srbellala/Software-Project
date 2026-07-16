@@ -14,6 +14,8 @@ interface AppState {
   /** Locked once a scan is loaded — can't switch T2/T1 mid-session. */
   modalityLocked: boolean;
   scanReady: boolean;
+  /** 0-100 while a scan upload is in flight; null when idle. */
+  scanUploadProgress: number | null;
   scanFiles: FileListEntry[];
   segFiles: FileListEntry[];
   currentScanLabel: string;
@@ -34,6 +36,7 @@ interface AppState {
   setModality: (m: Modality) => void;
   setModalityLocked: (locked: boolean) => void;
   setScanReady: (ready: boolean) => void;
+  setScanUploadProgress: (pct: number | null) => void;
   setScanFiles: (files: FileListEntry[]) => void;
   setSegFiles: (files: FileListEntry[]) => void;
   setCurrentScanLabel: (label: string) => void;
@@ -52,6 +55,7 @@ export const useAppStore = create<AppState>((set) => ({
   modality: "T2",
   modalityLocked: false,
   scanReady: false,
+  scanUploadProgress: null,
   scanFiles: [],
   segFiles: [],
   currentScanLabel: "",
@@ -70,6 +74,7 @@ export const useAppStore = create<AppState>((set) => ({
   setModality: (modality) => set({ modality }),
   setModalityLocked: (modalityLocked) => set({ modalityLocked }),
   setScanReady: (scanReady) => set({ scanReady }),
+  setScanUploadProgress: (scanUploadProgress) => set({ scanUploadProgress }),
   setScanFiles: (scanFiles) => set({ scanFiles }),
   setSegFiles: (segFiles) => set({ segFiles }),
   setCurrentScanLabel: (currentScanLabel) => set({ currentScanLabel }),
@@ -85,6 +90,7 @@ export const useAppStore = create<AppState>((set) => ({
     set({
       scanReady: false,
       modalityLocked: false,
+      scanUploadProgress: null,
       scanFiles: [],
       currentScanLabel: "",
       nVols: 0,

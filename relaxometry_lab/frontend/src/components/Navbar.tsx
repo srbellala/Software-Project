@@ -79,7 +79,6 @@ export function ModalityToggle({ variant }: { variant: "navbar" | "card" }) {
 }
 
 export function Navbar() {
-  const sid = useAppStore((s) => s.sid);
   return (
     <nav className="sticky top-0 z-20 flex h-13 w-full flex-shrink-0 items-center gap-3 bg-navy px-6 text-white shadow-[0_2px_6px_rgba(0,0,0,.25)]">
       <a href="/" className="mr-3 text-base font-bold tracking-wide text-white no-underline">
@@ -88,14 +87,6 @@ export function Navbar() {
       <div className="mx-2 h-6 w-px bg-white/25" />
       <span className="mr-1 text-[11px] text-white/50">tool</span>
       <ModalityToggle variant="navbar" />
-      {sid && <span className="ml-auto font-mono text-[10px] text-white/40">session {sid.slice(0, 8)}</span>}
-      <a
-        href="/tool-legacy"
-        title="Open the old vanilla-JS version of this tool"
-        className={`text-[11px] text-white/50 underline decoration-dotted hover:text-white/80 ${sid ? "ml-3" : "ml-auto"}`}
-      >
-        legacy version
-      </a>
     </nav>
   );
 }

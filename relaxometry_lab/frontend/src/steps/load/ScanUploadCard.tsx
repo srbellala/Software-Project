@@ -9,6 +9,7 @@ export function ScanUploadCard() {
   const modality = useAppStore((s) => s.modality);
   const scanFiles = useAppStore((s) => s.scanFiles);
   const scanReady = useAppStore((s) => s.scanReady);
+  const scanUploadProgress = useAppStore((s) => s.scanUploadProgress);
   const brukerStudyLoaded = useAppStore((s) => s.brukerStudyLoaded);
   const brukerZipTitle = useAppStore((s) => s.brukerZipTitle);
 
@@ -27,6 +28,18 @@ export function ScanUploadCard() {
         multiple
         onFiles={uploadScan}
       />
+
+      {scanUploadProgress !== null && (
+        <div className="mt-2.5 flex items-center gap-2.5">
+          <div className="h-2.5 flex-1 overflow-hidden rounded-lg bg-[#e8e5dc]">
+            <div
+              className="h-full rounded-lg bg-navy transition-[width] duration-200"
+              style={{ width: `${scanUploadProgress}%` }}
+            />
+          </div>
+          <span className="min-w-9 text-right text-[11px] text-muted">{scanUploadProgress}%</span>
+        </div>
+      )}
 
       <FileList items={scanFiles} />
 

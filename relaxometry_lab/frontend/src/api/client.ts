@@ -64,6 +64,49 @@ async function asJson<T>(r: Response): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+export type UploadProgress = (loaded: number, total: number) => void;
+
+/**
+ * fetch() has no upload-progress event, so uploads that want a progress bar
+ * go through XMLHttpRequest instead. Behaves like fetch + res.json() on
+ * success; throws on non-2xx or network failure.
+ */
+function xhrUpload<T>(
+  method: string,
+  url: string,
+  body: FormData | File,
+  onProgress?: UploadProgress
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded, e.total);
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(xhr.responseText ? (JSON.parse(xhr.responseText) as T) : ({} as T));
+        } catch {
+          resolve({} as T);
+        }
+      } else {
+        let detail = "Request failed";
+        try {
+          detail = JSON.parse(xhr.responseText).detail || detail;
+        } catch {
+          /* non-JSON error body */
+        }
+        reject(new Error(detail));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(body);
+  });
+}
+
 /**
  * Cloud Run's front end caps request bodies at 32MB, which multi-echo NIfTI
  * stacks routinely exceed. When the backend has UPLOAD_BUCKET configured, we
@@ -83,20 +126,45 @@ function gcsEnabled(): Promise<boolean> {
   return gcsEnabledPromise;
 }
 
-async function uploadFileViaGCS(sid: string, purpose: string, file: File): Promise<string> {
+function xhrPut(url: string, file: File, onProgress?: (loaded: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    if (onProgress) xhr.upload.onprogress = (e) => onProgress(e.loaded);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`Upload to storage failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(file);
+  });
+}
+
+async function uploadFileViaGCS(
+  sid: string,
+  purpose: string,
+  file: File,
+  onProgress?: (loaded: number) => void
+): Promise<string> {
   const { url, object_path } = await fetch(
     `/api/load/${sid}/upload-url?purpose=${purpose}&filename=${encodeURIComponent(file.name)}`,
     { method: "POST" }
   ).then((r) => asJson<{ url: string; object_path: string }>(r));
 
-  const put = await fetch(url, {
-    method: "PUT",
-    headers: { "Content-Type": "application/octet-stream" },
-    body: file,
-  });
-  if (!put.ok) throw new Error(`Upload to storage failed (${put.status})`);
-
+  await xhrPut(url, file, onProgress);
   return object_path;
+}
+
+/** Aggregates per-file byte progress from parallel GCS uploads into one 0-1 fraction. */
+function makeMultiFileProgress(files: File[], onProgress: UploadProgress) {
+  const totals = files.map((f) => f.size);
+  const totalBytes = totals.reduce((a, b) => a + b, 0);
+  const loaded = new Array(files.length).fill(0);
+  return (index: number) => (bytes: number) => {
+    loaded[index] = bytes;
+    onProgress(loaded.reduce((a, b) => a + b, 0), totalBytes);
+  };
 }
 
 export const api = {
@@ -106,9 +174,10 @@ export const api = {
     );
   },
 
-  async uploadScan(sid: string, files: File[]): Promise<ScanUploadResult> {
+  async uploadScan(sid: string, files: File[], onProgress?: UploadProgress): Promise<ScanUploadResult> {
     if (await gcsEnabled()) {
-      const objectPaths = await Promise.all(files.map((f) => uploadFileViaGCS(sid, "scan", f)));
+      const perFile = onProgress ? makeMultiFileProgress(files, onProgress) : () => undefined;
+      const objectPaths = await Promise.all(files.map((f, i) => uploadFileViaGCS(sid, "scan", f, perFile(i))));
       return fetch(`/api/load/${sid}/scan-from-gcs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -117,14 +186,12 @@ export const api = {
     }
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
-    return fetch(`/api/load/${sid}/scan`, { method: "POST", body: fd }).then((r) =>
-      asJson<ScanUploadResult>(r)
-    );
+    return xhrUpload<ScanUploadResult>("POST", `/api/load/${sid}/scan`, fd, onProgress);
   },
 
-  async uploadSegmentation(sid: string, file: File): Promise<SegUploadResult> {
+  async uploadSegmentation(sid: string, file: File, onProgress?: UploadProgress): Promise<SegUploadResult> {
     if (await gcsEnabled()) {
-      const objectPath = await uploadFileViaGCS(sid, "segmentation", file);
+      const objectPath = await uploadFileViaGCS(sid, "segmentation", file, (loaded) => onProgress?.(loaded, file.size));
       return fetch(`/api/load/${sid}/segmentation-from-gcs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -133,9 +200,7 @@ export const api = {
     }
     const fd = new FormData();
     fd.append("file", file);
-    return fetch(`/api/load/${sid}/segmentation`, { method: "POST", body: fd }).then((r) =>
-      asJson<SegUploadResult>(r)
-    );
+    return xhrUpload<SegUploadResult>("POST", `/api/load/${sid}/segmentation`, fd, onProgress);
   },
 
   clearScan(sid: string): Promise<{ cleared: boolean }> {
@@ -158,9 +223,9 @@ export const api = {
     );
   },
 
-  async uploadBrukerStudy(sid: string, file: File): Promise<BrukerStudyResult> {
+  async uploadBrukerStudy(sid: string, file: File, onProgress?: UploadProgress): Promise<BrukerStudyResult> {
     if (await gcsEnabled()) {
-      const objectPath = await uploadFileViaGCS(sid, "bruker-study", file);
+      const objectPath = await uploadFileViaGCS(sid, "bruker-study", file, (loaded) => onProgress?.(loaded, file.size));
       return fetch(`/api/load/${sid}/bruker-study-from-gcs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -169,9 +234,7 @@ export const api = {
     }
     const fd = new FormData();
     fd.append("file", file);
-    return fetch(`/api/load/${sid}/bruker-study`, { method: "POST", body: fd }).then((r) =>
-      asJson<BrukerStudyResult>(r)
-    );
+    return xhrUpload<BrukerStudyResult>("POST", `/api/load/${sid}/bruker-study`, fd, onProgress);
   },
 
   listBrukerScans(sid: string): Promise<BrukerStudyResult> {
