@@ -21,13 +21,13 @@ export async function startFit(sid: string, body: FitRunBody): Promise<void> {
 }
 
 export type FitProgressMsg =
-  | { status: "progress"; pct: number; done: number; total: number }
+  | { status: "progress"; pct: number; done: number; total: number; eta_seconds?: number }
   | { status: "done" }
   | { status: "error"; message?: string }
   | { status: "heartbeat" };
 
 export interface FitProgressHandlers {
-  onProgress: (pct: number, done: number, total: number) => void;
+  onProgress: (pct: number, done: number, total: number, etaSeconds?: number) => void;
   onDone: () => void;
   onError: (message: string) => void;
 }
@@ -38,7 +38,7 @@ export function subscribeFitProgress(sid: string, handlers: FitProgressHandlers)
   es.onmessage = (e) => {
     const msg: FitProgressMsg = JSON.parse(e.data);
     if (msg.status === "progress") {
-      handlers.onProgress(msg.pct, msg.done, msg.total);
+      handlers.onProgress(msg.pct, msg.done, msg.total, msg.eta_seconds);
     } else if (msg.status === "done") {
       es.close();
       handlers.onDone();

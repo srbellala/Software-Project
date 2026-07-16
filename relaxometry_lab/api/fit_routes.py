@@ -176,6 +176,14 @@ async def _run_fit(s, req):
         await q.put({"status": "error", "message": "Mask contains no voxels"})
         return
 
+    # Calibrated against api/fit_engine.py benchmarks (VARPRO batch solve):
+    # ~92k voxels/sec sustained for T2 (2 linear params + offset), ~180k/sec
+    # for T1 (1 linear param, smaller search grid). Rough estimate only —
+    # shown as "~N sec" next to a spinner, not a progress bar, since the
+    # fit no longer has meaningful per-voxel granularity to report.
+    voxels_per_sec = 92_000.0 if modality == "T2" else 180_000.0
+    eta_seconds = round(max(0.5, 0.05 + total / voxels_per_sec), 1)
+
     # Sigma from background (MAD, matching explorer)
     s.sigma_global = _estimate_sigma_mad(stacked, s.seg)
     s.fitting_done = False
@@ -202,16 +210,25 @@ async def _run_fit(s, req):
     noise_map  = np.full((X, Y, Z), np.nan, dtype=np.float32)
     rmse_map   = np.full((X, Y, Z), np.nan, dtype=np.float32)
 
-    await q.put({"status": "progress", "pct": 5, "done": 0, "total": total})
-    await asyncio.sleep(0)
+    await q.put({"status": "progress", "pct": 5, "done": 0, "total": total, "eta_seconds": eta_seconds})
+    # A real (not zero-length) sleep here, not just asyncio.sleep(0) — the
+    # fit itself runs in a worker thread below, but this message still needs
+    # a moment to actually make it out over the SSE connection before we
+    # start that thread, or the ETA is queued but never flushed to the
+    # browser until the fit is basically done anyway.
+    await asyncio.sleep(0.05)
 
     # Whole-volume vectorized fit (VARPRO) — replaces the old one-curve_fit-per-
     # voxel loop. See api/fit_engine.py for why this is dramatically faster.
+    # Runs in a worker thread: fit_t2_batch/fit_t1_batch are pure NumPy (no
+    # `await` points), so calling them directly would block the single-
+    # threaded event loop for the whole fit — freezing SSE delivery and any
+    # other concurrent request on the server for that entire window.
     Yvol = stacked[xs, ys, zs, :].astype(np.float64)   # (total, nVol)
 
     if modality == "T2":
         TE_s = s.acq_params / 1000.0          # ms → seconds (critical)
-        res = fit_t2_batch(Yvol, TE_s, s.sigma_global, up)
+        res = await asyncio.to_thread(fit_t2_batch, Yvol, TE_s, s.sigma_global, up)
 
         await q.put({"status": "progress", "pct": 90, "done": total, "total": total})
         await asyncio.sleep(0)
@@ -230,7 +247,7 @@ async def _run_fit(s, req):
     else:  # T1 VFA
         tr = req.tr_ms or s.tr_ms or 15.0
         s.tr_ms = tr
-        res = fit_t1_batch(Yvol, s.acq_params, tr)
+        res = await asyncio.to_thread(fit_t1_batch, Yvol, s.acq_params, tr)
 
         await q.put({"status": "progress", "pct": 90, "done": total, "total": total})
         await asyncio.sleep(0)

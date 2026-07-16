@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { ParamTable } from "./fit/ParamTable";
 import {
@@ -32,8 +32,8 @@ export function FitStep() {
   const [trMs, setTrMs] = useState(15);
 
   const [running, setRunning] = useState(false);
-  const [pct, setPct] = useState(0);
-  const [progressLabel, setProgressLabel] = useState("");
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const countdownRef = useRef<number | null>(null);
 
   const isT2 = modality === "T2";
   const modelName = isT2 ? "T2 Mono-Exponential" : "T1 VFA (Variable Flip Angle)";
@@ -46,6 +46,23 @@ export function FitStep() {
     setT1((p) => ({ ...p, ...patch }));
   }
 
+  function stopCountdown() {
+    if (countdownRef.current !== null) {
+      window.clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+  }
+
+  function startCountdown(etaSeconds: number) {
+    stopCountdown();
+    setRemainingSeconds(Math.ceil(etaSeconds));
+    countdownRef.current = window.setInterval(() => {
+      setRemainingSeconds((s) => (s === null ? null : Math.max(0, s - 1)));
+    }, 1000);
+  }
+
+  useEffect(() => stopCountdown, []);
+
   async function runFit() {
     if (!sid) {
       toast("No session", "error");
@@ -53,8 +70,7 @@ export function FitStep() {
     }
     const params = isT2 ? collectT2Params(t2) : collectT1Params(t1);
     setRunning(true);
-    setPct(0);
-    setProgressLabel("Starting…");
+    setRemainingSeconds(null);
 
     try {
       await startFit(sid, { modality, params, tr_ms: isT2 ? null : trMs });
@@ -65,19 +81,20 @@ export function FitStep() {
     }
 
     subscribeFitProgress(sid, {
-      onProgress: (p, done, total) => {
-        setPct(p);
-        setProgressLabel(`Fitting… ${done} / ${total} voxels (${p}%)`);
+      onProgress: (_p, _done, _total, etaSeconds) => {
+        if (etaSeconds !== undefined && countdownRef.current === null) {
+          startCountdown(etaSeconds);
+        }
       },
       onDone: () => {
-        setPct(100);
-        setProgressLabel("Complete!");
+        stopCountdown();
         toast("Fitting complete", "ok");
         setRunning(false);
         setFittingDone(true);
         setTimeout(() => setStep(4), 600);
       },
       onError: (message) => {
+        stopCountdown();
         toast(`Fit error: ${message}`, "error");
         setRunning(false);
       },
@@ -124,12 +141,16 @@ export function FitStep() {
         </p>
 
         {running && (
-          <>
-            <div className="mt-2.5 h-2.5 overflow-hidden rounded-lg bg-[#e8e5dc]">
-              <div className="h-full rounded-lg bg-navy transition-[width] duration-300" style={{ width: `${pct}%` }} />
+          <div className="mt-2.5 flex items-center gap-2.5">
+            <div className="h-4.5 w-4.5 flex-shrink-0 animate-spin rounded-full border-2 border-[#e8e5dc] border-t-navy" />
+            <div className="text-[11px] text-muted">
+              {remainingSeconds === null
+                ? "Fitting…"
+                : remainingSeconds > 0
+                  ? `Fitting… ~${remainingSeconds}s remaining`
+                  : "Finishing up…"}
             </div>
-            <div className="mt-1.5 text-[11px] text-muted">{progressLabel}</div>
-          </>
+          </div>
         )}
 
         <div className="mt-4 flex items-center justify-between border-t border-border pt-3.5">
