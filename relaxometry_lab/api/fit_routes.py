@@ -161,15 +161,56 @@ def _fit_t1_voxel(signal, alphas_deg, tr_ms):
 
 # ─────────────────────────────────────────────── async fit runner ─────────────
 
+def _denoise_stacked(stacked: np.ndarray, sigma_vox: float) -> np.ndarray:
+    """Spatially smooth each acquisition volume independently (never blurring
+    across TE/flip-angle) — reduces per-voxel noise before fitting, at the
+    cost of some spatial resolution. Always computed fresh from the raw
+    volume, never applied on top of an already-denoised one."""
+    from scipy.ndimage import gaussian_filter
+    out = np.empty_like(stacked)
+    for i in range(stacked.shape[3]):
+        out[..., i] = gaussian_filter(stacked[..., i], sigma=sigma_vox)
+    return out
+
+
 async def _run_fit(s, req):
     from api.fit_engine import fit_t2_batch, fit_t1_batch
 
     q = s._progress_q
-    stacked = s.stacked
-    X, Y, Z, nVol = stacked.shape
     modality = req.modality
 
-    mask = (s.seg > 0) if s.seg is not None else (stacked[..., 0] > 0)
+    # User-supplied parameter overrides (from frontend param table)
+    up = req.params
+    thresh_lo = float(up.get("thresh_lo",  FC.LOW_THRESH_MS))
+    thresh_hi = float(up.get("thresh_hi",  FC.HIGH_THRESH_MS))
+    r2_thresh = float(up.get("r2_thresh",  FC.R2_FIT_THRESH))
+    # Denoising and the noise-floor mask below are T1-only: T2 fitting stays
+    # byte-for-byte identical to the pre-T1-changes baseline (plain `> 0`
+    # mask, no denoising), since T2 was never part of what those addressed.
+    denoise_on = bool(up.get("denoise", 0)) and modality == "T1"
+    denoise_sigma = float(up.get("denoise_sigma", 0.75))
+
+    if denoise_on:
+        s.stacked_denoised = await asyncio.to_thread(_denoise_stacked, s.stacked, denoise_sigma)
+        stacked = s.stacked_denoised
+    else:
+        s.stacked_denoised = None
+        stacked = s.stacked
+    X, Y, Z, nVol = stacked.shape
+
+    # Sigma from background (MAD, matching explorer) — computed before the mask
+    # so the T1 no-segmentation fallback below can use it as a noise floor.
+    s.sigma_global = _estimate_sigma_mad(stacked, s.seg)
+    s.fitting_done = False
+
+    if s.seg is not None:
+        mask = s.seg > 0
+    elif modality == "T1" and s.sigma_global and s.sigma_global > 0:
+        # Bare `> 0` lets thermal-noise background (never exactly zero) get
+        # fit alongside real tissue; require signal well above the noise floor.
+        mask = stacked[..., 0] > (s.sigma_global * 4.0)
+    else:
+        mask = stacked[..., 0] > 0
     xs, ys, zs = np.where(mask)
     total = len(xs)
     if total == 0:
@@ -184,22 +225,14 @@ async def _run_fit(s, req):
     voxels_per_sec = 92_000.0 if modality == "T2" else 180_000.0
     eta_seconds = round(max(0.5, 0.05 + total / voxels_per_sec), 1)
 
-    # Sigma from background (MAD, matching explorer)
-    s.sigma_global = _estimate_sigma_mad(stacked, s.seg)
-    s.fitting_done = False
-
-    # User-supplied parameter overrides (from frontend param table)
-    up = req.params
-    thresh_lo = float(up.get("thresh_lo",  FC.LOW_THRESH_MS))
-    thresh_hi = float(up.get("thresh_hi",  FC.HIGH_THRESH_MS))
-    r2_thresh = float(up.get("r2_thresh",  FC.R2_FIT_THRESH))
-
     s.fit_config = {
-        "modality":  modality,
-        "tr_ms":     s.tr_ms,
-        "thresh_lo": thresh_lo,
-        "thresh_hi": thresh_hi,
-        "r2_thresh": r2_thresh,
+        "modality":      modality,
+        "tr_ms":         s.tr_ms,
+        "thresh_lo":     thresh_lo,
+        "thresh_hi":     thresh_hi,
+        "r2_thresh":     r2_thresh,
+        "denoise":       denoise_on,
+        "denoise_sigma": denoise_sigma if denoise_on else None,
     }
 
     # Result maps
@@ -448,7 +481,10 @@ async def get_voxel(sid: str, x: int = 0, y: int = 0, z: int = 0):
     yi = int(np.clip(y, 0, Y_dim - 1))
     zi = int(np.clip(z, 0, Z_dim - 1))
 
-    signal   = s.stacked[xi, yi, zi, :].astype(float).tolist()
+    # Use the same (denoised, if the last fit used it) signal the batch fit
+    # actually saw, so this single-voxel recomputation matches the map.
+    src = s.stacked_denoised if s.stacked_denoised is not None else s.stacked
+    signal   = src[xi, yi, zi, :].astype(float).tolist()
     t2_val   = float(s.param_map[xi, yi, zi]) if s.param_map is not None else np.nan
     r2_val   = float(s.r2_map[xi, yi, zi])   if s.r2_map   is not None else np.nan
     rmse_val = float(s.rmse_map[xi, yi, zi]) if s.rmse_map is not None else np.nan

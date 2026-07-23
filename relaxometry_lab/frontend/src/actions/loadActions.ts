@@ -174,4 +174,23 @@ export async function selectBrukerScan() {
   }
 }
 
+export async function selectBrukerScansMulti() {
+  const sid = useAppStore.getState().sid;
+  const scans = useBrukerStore.getState().selectedMulti;
+  if (!sid || scans.length < 2) return;
+  try {
+    toast(`Loading ${scans.length} scans as a flip-angle series…`);
+    const d = await api.selectBrukerScansMulti(sid, scans);
+    useBrukerStore.getState().closeModal();
+    applyScanResult(
+      d,
+      d.files.map((f) => ({ icon: "📄", label: f }))
+    );
+    toast(`Loaded ${scans.length} scans · ${d.n_vols} volumes · ${d.vox_str}`, "ok");
+    await doCheck();
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
+}
+
 export type { Modality };

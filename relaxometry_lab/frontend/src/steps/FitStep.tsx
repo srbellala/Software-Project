@@ -30,6 +30,7 @@ export function FitStep() {
   const [t2, setT2] = useState<T2ParamState>(DEFAULT_T2_PARAMS);
   const [t1, setT1] = useState<T1ParamState>(DEFAULT_T1_PARAMS);
   const [trMs, setTrMs] = useState(15);
+  const [denoise, setDenoise] = useState(true);
 
   const [running, setRunning] = useState(false);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
@@ -68,7 +69,7 @@ export function FitStep() {
       toast("No session", "error");
       return;
     }
-    const params = isT2 ? collectT2Params(t2) : collectT1Params(t1);
+    const params = { ...(isT2 ? collectT2Params(t2) : collectT1Params(t1)), denoise: denoise ? 1 : 0 };
     setRunning(true);
     setRemainingSeconds(null);
 
@@ -133,6 +134,17 @@ export function FitStep() {
             />
             <span className="text-[11px] text-muted">ms</span>
           </div>
+        )}
+
+        {!isT2 && (
+          <label className="my-2.5 flex cursor-pointer items-center gap-2 text-xs text-muted">
+            <input
+              type="checkbox"
+              checked={denoise}
+              onChange={(e) => setDenoise(e.target.checked)}
+            />
+            Apply spatial denoising before fitting (Gaussian filter — reduces per-voxel noise)
+          </label>
         )}
 
         <p className="my-4 text-[11px] leading-[1.75] text-muted italic">

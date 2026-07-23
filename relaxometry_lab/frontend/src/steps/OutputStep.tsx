@@ -15,13 +15,19 @@ type Mode = "roi" | "voxel" | "compare";
 export function OutputStep() {
   const sid = useAppStore((s) => s.sid);
   const currentScanLabel = useAppStore((s) => s.currentScanLabel);
+  const modality = useAppStore((s) => s.modality);
   const setStep = useAppStore((s) => s.setStep);
 
   const engineRef = useRef(new MapEngine());
   const sliceRequestIdRef = useRef(0);
   const [mode, setMode] = useState<Mode>("roi");
   const [result, setResult] = useState<FitResult | null>(null);
-  const [useAll, setUseAll] = useState(false);
+  // T1 defaults to showing every voxel the fit could reach a value for (not
+  // just the R²-quality-filtered subset) — the bounded nonlinear fit always
+  // converges to *some* value per masked voxel, so this is what gives full,
+  // gap-free coverage matching a typical published T1 map. T2 keeps its
+  // original R²-filtered default (unchanged from before that T1 change).
+  const [useAll, setUseAll] = useState(modality === "T1");
   const [scatter, setScatter] = useState<ScatterResult | null>(null);
   const [selected, setSelected] = useState<{ x: number; y: number; z: number } | null>(null);
   const [voxelData, setVoxelData] = useState<VoxelResult | null>(null);
@@ -32,7 +38,7 @@ export function OutputStep() {
     if (!sid) return;
     setLoading(true);
     outputApi
-      .fetchResult(sid)
+      .fetchResult(sid, undefined, modality === "T1")
       .then((res) => {
         setResult(res);
         engineRef.current.loadResult(res, res.vmin, res.vmax);

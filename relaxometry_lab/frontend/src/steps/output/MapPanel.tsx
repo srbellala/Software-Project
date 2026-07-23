@@ -188,7 +188,9 @@ export function MapPanel({
             <CtrlButton onClick={() => engine.resetView()}>Reset view</CtrlButton>
           </div>
           <div className="flex flex-wrap items-center gap-1">
-            <span className="text-[10px] font-semibold tracking-[.04em] text-muted uppercase">T2 min</span>
+            <span className="text-[10px] font-semibold tracking-[.04em] text-muted uppercase">
+              {result?.label ?? "T2"} min
+            </span>
             <input
               type="number"
               value={t2Min}
@@ -196,7 +198,9 @@ export function MapPanel({
               onBlur={applyT2Range}
               className="w-14 rounded-lg border border-border bg-white px-2 py-1.5 text-[11px] text-text focus:border-accent focus:outline-none"
             />
-            <span className="text-[10px] font-semibold tracking-[.04em] text-muted uppercase">T2 max</span>
+            <span className="text-[10px] font-semibold tracking-[.04em] text-muted uppercase">
+              {result?.label ?? "T2"} max
+            </span>
             <input
               type="number"
               value={t2Max}
@@ -204,7 +208,7 @@ export function MapPanel({
               onBlur={applyT2Range}
               className="w-14 rounded-lg border border-border bg-white px-2 py-1.5 text-[11px] text-text focus:border-accent focus:outline-none"
             />
-            <CtrlButton onClick={resetT2Range}>Reset T2</CtrlButton>
+            <CtrlButton onClick={resetT2Range}>Reset {result?.label ?? "T2"}</CtrlButton>
             <label className="flex cursor-pointer items-center gap-1 text-[11px] whitespace-nowrap text-muted">
               <input
                 type="checkbox"
@@ -214,7 +218,7 @@ export function MapPanel({
                   onIgnoreThreshChange(e.target.checked);
                 }}
               />
-              Ignore T2 threshold
+              Ignore {result?.label ?? "T2"} threshold (show every fitted voxel)
             </label>
           </div>
           <div className="flex flex-wrap items-center gap-1">

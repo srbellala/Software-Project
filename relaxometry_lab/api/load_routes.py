@@ -936,7 +936,7 @@ def _bruker_scan_info(scan_dir: str) -> dict:
         if ne_raw:
             n_echo = max(int(ne_raw[0]), 0)
 
-    flip = _bruker_floats(text, "PVM_ExcPulseAngle") or _bruker_floats(text, "ExcPulse1")
+    flip = _bruker_floats(text, "PVM_ExcPulseAngle") or _bruker_floats(acqp, "ACQ_flip_angle")
     tr   = _bruker_floats(text, "PVM_RepetitionTime")
 
     # Modality detection (method name takes priority, then echo count)
@@ -1210,6 +1210,106 @@ async def select_bruker_scan(sid: str, scan: int):
         "files":      s.file_names,
         "label":      label,
         "modality":   modality,
+    }
+
+
+@router.post("/{sid}/bruker-select-multi")
+async def select_bruker_scans_multi(sid: str, payload: dict = Body(...)):
+    """Combine several single-flip-angle Bruker scans into one flip-angle series.
+
+    Some VFA acquisitions are captured as a separate scan per flip angle rather
+    than one multi-volume scan; this stacks them into a single (X,Y,Z,nFlip)
+    volume the same way a native multi-volume T1 scan would be represented.
+    """
+    s = get_session(sid)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if not getattr(s, "bruker_study_dir", None):
+        raise HTTPException(400, "No Bruker study uploaded — call /bruker-study first")
+
+    scans = payload.get("scans") if isinstance(payload, dict) else None
+    if not scans or not isinstance(scans, list) or len(scans) < 2:
+        raise HTTPException(400, "Provide at least two scan numbers to combine")
+
+    volumes = []
+    affine = None
+    tr_ms = None
+    titles = []
+
+    for scan in scans:
+        scan_dir = os.path.join(s.bruker_study_dir, str(scan))
+        if not os.path.isdir(scan_dir):
+            raise HTTPException(404, f"Scan {scan} not found in study")
+
+        info = _bruker_scan_info(scan_dir)
+        dcm, nii = _bruker_locate_exports(scan_dir)
+
+        stacked = this_affine = acq_img = None
+        errors  = []
+        if dcm:
+            try:
+                stacked, this_affine, acq_img = (
+                    _load_dicom_4d(dcm[0]) if len(dcm) == 1
+                    else _load_dicom_series_multifile(dcm)
+                )
+            except Exception as exc:
+                errors.append(f"DICOM: {exc}")
+        if stacked is None and nii:
+            try:
+                stacked, this_affine, acq_img = _load_nifti_folder(nii)
+            except Exception as exc:
+                errors.append(f"NIfTI: {exc}")
+        if stacked is None:
+            raise HTTPException(400, f"Could not load scan {scan}: " + "; ".join(errors))
+
+        if stacked.shape[3] != 1:
+            raise HTTPException(
+                400,
+                f"Scan {scan} has {stacked.shape[3]} volumes — expected one flip "
+                "angle per scan for multi-scan VFA combining",
+            )
+
+        flip = info.get("flip_angle")
+        if flip is None:
+            raise HTTPException(400, f"Scan {scan} has no flip angle in its method/acqp files")
+
+        if affine is None:
+            affine = this_affine
+        if tr_ms is None:
+            tr_ms = info.get("tr_ms")
+
+        volumes.append((float(flip), stacked[:, :, :, 0]))
+        titles.append(info["title"] or f"scan_{scan}_{info['method']}")
+
+    volumes.sort(key=lambda v: v[0])
+    flips  = np.array([v[0] for v in volumes], dtype=float)
+    shapes = {v[1].shape for v in volumes}
+    if len(shapes) > 1:
+        raise HTTPException(400, f"Selected scans have mismatched dimensions: {shapes}")
+
+    combined = np.stack([v[1] for v in volumes], axis=3)
+
+    s.stacked    = combined.astype(np.float32)
+    s.affine     = affine
+    s.acq_params = flips
+    s.modality   = "T1"
+    s.tr_ms      = tr_ms
+    s.input_type = "bruker"
+    s.file_names = titles
+
+    X, Y, Z, nVol = combined.shape
+    print(f"[Bruker] Combined {len(scans)} scans into flip-angle series — "
+          f"T1, {nVol} volumes, {X}x{Y}x{Z}, flips={flips.tolist()}")
+
+    return {
+        "shape":      [X, Y, Z],
+        "n_vols":     nVol,
+        "acq_params": flips.tolist(),
+        "vox_str":    _vox_size_str(affine),
+        "input_type": "bruker",
+        "files":      s.file_names,
+        "label":      "flip angle",
+        "modality":   "T1",
     }
 
 

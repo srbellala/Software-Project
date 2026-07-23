@@ -400,7 +400,9 @@ def _build_report_data(
         {"param": f"{lbl} accepted range",
          "value": f"{fc.get('thresh_lo', FC.LOW_THRESH_MS):.1f} – {fc.get('thresh_hi', FC.HIGH_THRESH_MS):.1f} ms"},
         {"param": "Masks used", "value": "Yes" if has_seg else "No — fit all non-zero voxels", "highlight": has_seg},
-        {"param": "Denoising applied", "value": "No"},
+        {"param": "Denoising applied",
+         "value": f"Yes — Gaussian spatial filter, σ={fc.get('denoise_sigma'):.2f} voxels" if fc.get("denoise") else "No",
+         "highlight": bool(fc.get("denoise"))},
     ]
     bounds_rows = (
         [
@@ -544,7 +546,8 @@ def _voxel_fit_svg(s, xyz: Optional[tuple], curve_color: str, fig_no: int, title
     if xyz is None or s.stacked is None or s.acq_params is None:
         return f'<div class="chart-empty">Figure {fig_no}. {_esc(title_prefix)} voxel — no data available.</div>'
     xi, yi, zi = xyz
-    sig = s.stacked[xi, yi, zi, :].astype(float)
+    src = s.stacked_denoised if getattr(s, "stacked_denoised", None) is not None else s.stacked
+    sig = src[xi, yi, zi, :].astype(float)
     te  = np.asarray(s.acq_params, dtype=float)
 
     if s.modality == "T2":

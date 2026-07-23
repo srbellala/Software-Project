@@ -246,4 +246,12 @@ export const api = {
       asJson<ScanUploadResult>(r)
     );
   },
+
+  selectBrukerScansMulti(sid: string, scans: number[]): Promise<ScanUploadResult> {
+    return fetch(`/api/load/${sid}/bruker-select-multi`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scans }),
+    }).then((r) => asJson<ScanUploadResult>(r));
+  },
 };

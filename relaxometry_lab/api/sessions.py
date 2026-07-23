@@ -10,7 +10,11 @@ class Session:
 
         # Loaded data
         self.modality: str = "T2"              # "T2" or "T1"
-        self.stacked: Optional[np.ndarray] = None   # (X, Y, Z, nVol) nibabel axes
+        self.stacked: Optional[np.ndarray] = None   # (X, Y, Z, nVol) nibabel axes, always raw
+        self.stacked_denoised: Optional[np.ndarray] = None  # spatially-smoothed copy used for the
+                                                              # most recent fit, when denoising was on;
+                                                              # recomputed fresh from `stacked` on every
+                                                              # fit run (never reused/compounded)
         self.affine: Optional[np.ndarray] = None
         self.acq_params: Optional[np.ndarray] = None  # TE ms (T2) or flip angles deg (T1)
         self.tr_ms: Optional[float] = None            # for T1 VFA

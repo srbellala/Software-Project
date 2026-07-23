@@ -19,6 +19,11 @@ golden-section refinement within that bracket. No Jacobians, no per-voxel
 Python-level work — the inner loop is over grid points (hundreds), not voxels
 (often hundreds of thousands).
 
+Bounded search means every masked voxel gets *some* in-range value — unlike
+a closed-form linear (DESPOT1-style) fit, there's no hard rejection gate, so
+coverage is always complete; per-voxel fit quality is reported separately via
+R²/chi2 rather than by leaving low-confidence voxels blank.
+
 Single-voxel recomputation (api/fit_routes.py's get_voxel endpoint) still uses
 the original scipy-based _fit_t2_voxel/_fit_t1_voxel — that path only ever
 fits one voxel at a time, so it was never the bottleneck.

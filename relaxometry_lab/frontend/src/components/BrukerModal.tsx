@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useBrukerStore, type BrukerFilter } from "../store/brukerStore";
 import { Button } from "../components/Button";
-import { selectBrukerScan } from "../actions/loadActions";
+import { selectBrukerScan, selectBrukerScansMulti } from "../actions/loadActions";
 import type { BrukerScanInfo } from "../api/client";
 
 const FILTERS: { key: BrukerFilter; label: string }[] = [
@@ -51,6 +51,8 @@ export function BrukerModal() {
   const setFilter = useBrukerStore((s) => s.setFilter);
   const selected = useBrukerStore((s) => s.selected);
   const setSelected = useBrukerStore((s) => s.setSelected);
+  const selectedMulti = useBrukerStore((s) => s.selectedMulti);
+  const toggleMulti = useBrukerStore((s) => s.toggleMulti);
   const closeModal = useBrukerStore((s) => s.closeModal);
 
   const rows = useMemo(() => {
@@ -60,8 +62,12 @@ export function BrukerModal() {
 
   if (!modalOpen) return null;
 
-  const hint = !selected
-    ? "Click a row to select a scan"
+  const multiMode = selectedMulti.length > 0;
+
+  const hint = multiMode
+    ? `${selectedMulti.length} scan${selectedMulti.length > 1 ? "s" : ""} checked for flip-angle series`
+    : !selected
+    ? "Click a row to select a scan, or check T1 rows to combine several as one flip-angle series"
     : (() => {
         const s = scans.find((x) => x.scan === selected.scan);
         const preferredFit = selected.modality === "T2" ? "T2" : selected.modality === "T1" ? "T1" : null;
@@ -106,9 +112,9 @@ export function BrukerModal() {
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr>
-                {["#", "Title", "Modality", "Echoes / TEs · Flip Angle", "Files"].map((h) => (
+                {["", "#", "Title", "Modality", "Echoes / TEs · Flip Angle", "Files"].map((h, i) => (
                   <th
-                    key={h}
+                    key={i}
                     className="sticky top-0 whitespace-nowrap border-b-2 border-border bg-card px-3.5 py-2.5 text-left text-[11px] font-bold tracking-wide text-muted uppercase"
                   >
                     {h}
@@ -119,7 +125,7 @@ export function BrukerModal() {
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="p-6 text-center text-muted">
+                  <td colSpan={6} className="p-6 text-center text-muted">
                     No scans match this filter.
                   </td>
                 </tr>
@@ -127,14 +133,25 @@ export function BrukerModal() {
               {rows.map((s) => {
                 const { teStr, echoStr, filesStr, preferredFit } = rowMeta(s);
                 const isSelected = selected?.scan === s.scan;
+                const isChecked = selectedMulti.includes(s.scan);
                 return (
                   <tr
                     key={s.scan}
                     onClick={() => setSelected({ scan: s.scan, modality: s.modality })}
                     className={`cursor-pointer border-b border-border transition-colors hover:bg-accent-light ${
                       isSelected ? "bg-[#dbeeff]" : ""
-                    } ${!preferredFit ? "opacity-55" : ""}`}
+                    } ${isChecked ? "bg-[#fde8d0]" : ""} ${!preferredFit ? "opacity-55" : ""}`}
                   >
+                    <td className="w-8 px-3.5 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      {s.modality === "T1" && (
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleMulti(s.scan)}
+                          className="cursor-pointer"
+                        />
+                      )}
+                    </td>
                     <td className="w-10 px-3.5 py-2.5 font-bold text-muted">{s.scan}</td>
                     <td className="px-3.5 py-2.5">{s.title || "—"}</td>
                     <td className="px-3.5 py-2.5">
@@ -157,9 +174,15 @@ export function BrukerModal() {
 
         <div className="flex flex-shrink-0 items-center justify-between border-t border-border px-5 py-3">
           <span className="text-xs text-muted">{hint}</span>
-          <Button disabled={!selected} onClick={selectBrukerScan}>
-            Use Selected Scan →
-          </Button>
+          {multiMode ? (
+            <Button disabled={selectedMulti.length < 2} onClick={selectBrukerScansMulti}>
+              Load {selectedMulti.length} Scans as Flip-Angle Series →
+            </Button>
+          ) : (
+            <Button disabled={!selected} onClick={selectBrukerScan}>
+              Use Selected Scan →
+            </Button>
+          )}
         </div>
       </div>
     </div>
