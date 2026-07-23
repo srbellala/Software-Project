@@ -294,8 +294,12 @@ def _load_dicom_4d(path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     pfgs = getattr(ds, "PerFrameFunctionalGroupsSequence", None)
 
     if pfgs and len(pfgs) == n_frames:
-        frames_info = [{"te": _frame_echo_time(pfg, i),
-                        "loc": _frame_position(pfg, i),
+        normal = _dicom_slice_normal(ds)
+        real_tes = [_frame_echo_time_real(pfg) for pfg in pfgs]
+        has_real_te = any(t is not None for t in real_tes)
+        frames_info = [{"te": real_tes[i] if real_tes[i] is not None
+                             else (float((i + 1) * 10) if has_real_te else 0.0),
+                        "loc": _frame_position(pfg, normal, i),
                         "idx": i}
                        for i, pfg in enumerate(pfgs)]
         unique_locs = sorted(set(round(f["loc"], 2) for f in frames_info))
@@ -307,29 +311,54 @@ def _load_dicom_4d(path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             stacked[:, :, loc_map[round(f["loc"],2)], te_map[f["te"]]] = pixels[f["idx"]].T
         return stacked, _enhanced_dicom_affine(ds, pfgs, unique_locs), np.array(unique_tes)
 
-    # Fallback: treat frames as echoes of one slice
-    te_list = [float(getattr(ds, "EchoTime", (i+1)*10.0)) for i in range(n_frames)]
-    order   = np.argsort(te_list)
-    tes     = np.array(te_list)[order]
-    pix     = pixels[order].transpose(2, 1, 0)[:, :, np.newaxis, :]
-    return pix, _simple_dicom_affine(ds), tes
+    # No per-frame metadata: there's no reliable way to tell whether these
+    # frames are distinct slices of one 3D volume or distinct echoes/flip
+    # angles of one slice. Treat them as slices of a single volume — by far
+    # the more common case for plain multiframe DICOM lacking rich per-frame
+    # tags — rather than fabricating a fake echo/volume split from the frame
+    # index, which used to shred real 3D scans into bogus 1-slice "volumes".
+    te = float(getattr(ds, "EchoTime", 10.0))
+    pix = pixels.transpose(2, 1, 0)[:, :, :, np.newaxis]
+    return pix, _simple_dicom_affine(ds), np.array([te])
 
 
-def _frame_echo_time(pfg, fallback_idx: int) -> float:
+def _frame_echo_time_real(pfg) -> float | None:
     for seq_name in ("MREchoSequence", "MRTimingAndRelatedParametersSequence"):
         seq = getattr(pfg, seq_name, None)
         if seq:
             for tag in ("EffectiveEchoTime", "EchoTime"):
                 if hasattr(seq[0], tag):
                     return float(getattr(seq[0], tag))
-    return float((fallback_idx + 1) * 10)
+    return None
 
 
-def _frame_position(pfg, fallback_idx: int) -> float:
+def _dicom_slice_normal(ds) -> np.ndarray:
+    """
+    Through-plane unit vector for an enhanced multiframe DICOM, derived from
+    the shared PlaneOrientationSequence. Slices only vary monotonically along
+    this axis in general — for non-axial acquisitions (coronal, sagittal,
+    oblique) that's NOT the Z axis, so frame positions must be projected onto
+    it rather than reading ImagePositionPatient[2] directly (which silently
+    collapses every coronal/sagittal slice onto one Z value).
+    """
+    try:
+        sfgs = getattr(ds, "SharedFunctionalGroupsSequence", [])
+        poo = getattr(sfgs[0], "PlaneOrientationSequence", None) if sfgs else None
+        iop = [float(v) for v in poo[0].ImageOrientationPatient] if poo else None
+        if iop:
+            row_cos = np.array(iop[:3]); col_cos = np.array(iop[3:])
+            return np.cross(row_cos, col_cos)
+    except Exception:
+        pass
+    return np.array([0.0, 0.0, 1.0])
+
+
+def _frame_position(pfg, normal: np.ndarray, fallback_idx: int) -> float:
     ppo = getattr(pfg, "PlanePositionSequence", None)
     if ppo:
         try:
-            return float(ppo[0].ImagePositionPatient[2])
+            ipp = np.array([float(v) for v in ppo[0].ImagePositionPatient])
+            return float(np.dot(ipp, normal))
         except Exception:
             pass
     return float(fallback_idx)
@@ -380,6 +409,75 @@ def _is_dicom(path: str) -> bool:
             return f.read(4) == b"DICM"
     except Exception:
         return False
+
+
+def _load_dicom_series_generic(paths: List[str], modality: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Stack a folder of single-frame DICOM slices (one file per slice — the
+    common export format for real 3D scans, as opposed to a single enhanced
+    multiframe file) into (X,Y,Z,nVol).
+
+    Groups frames by slice location; the acquisition-parameter axis is
+    EchoTime for T2 or FlipAngle for T1. If every frame shares the same
+    value (or the tag is absent everywhere — a plain single-volume 3D scan
+    with no echo/flip-angle variation), all frames collapse into one volume
+    differentiated purely by slice location rather than a meaningless split.
+    """
+    import pydicom
+
+    tag = "EchoTime" if modality == "T2" else "FlipAngle"
+    frames = []
+    for path in paths:
+        try:
+            ds = pydicom.dcmread(path, stop_before_pixels=True)
+        except Exception:
+            continue
+        acq = float(getattr(ds, tag, 0.0))
+        try:
+            loc = float(ds.SliceLocation)
+        except Exception:
+            ipp = getattr(ds, "ImagePositionPatient", None)
+            loc = float(ipp[2]) if ipp else 0.0
+        frames.append({"path": path, "acq": round(acq, 3), "loc": round(loc, 2)})
+
+    if not frames:
+        raise ValueError("No readable DICOM slices")
+
+    unique_locs = sorted(set(f["loc"] for f in frames))
+    unique_acqs = sorted(set(f["acq"] for f in frames))
+
+    if len(unique_acqs) < 2:
+        # No real per-frame variation — one volume, slices only.
+        acq_map = {a: 0 for a in unique_acqs}
+        n_acq = 1
+    else:
+        acq_map = {a: i for i, a in enumerate(unique_acqs)}
+        n_acq = len(unique_acqs)
+
+    if modality == "T1" and n_acq > 1 and unique_acqs[0] == 0.0:
+        raise ValueError(
+            "These DICOM files don't have distinct FlipAngle (0018,1314) tags — "
+            "VFA fitting needs each flip angle's slices tagged with its flip angle."
+        )
+
+    loc_map = {loc: i for i, loc in enumerate(unique_locs)}
+
+    ds0 = pydicom.dcmread(frames[0]["path"])
+    rows, cols = ds0.pixel_array.shape
+    vol = np.zeros((cols, rows, len(unique_locs), n_acq), dtype=np.float32)
+    for f in frames:
+        try:
+            ds = pydicom.dcmread(f["path"])
+            vol[:, :, loc_map[f["loc"]], acq_map[f["acq"]]] = ds.pixel_array.astype(np.float32).T
+        except Exception:
+            continue
+
+    if n_acq == 1:
+        acq_arr = np.array([unique_acqs[0] if unique_acqs else (10.0 if modality == "T2" else 0.0)])
+    else:
+        acq_arr = np.array(unique_acqs, dtype=float)
+
+    return vol, _simple_dicom_affine(ds0), acq_arr
 
 
 # ── Demo dataset (matches load_demo in t2_voxel_explorer.py exactly) ─────────
@@ -489,17 +587,26 @@ def _process_scan_files(s: Session, saved: List[str]) -> dict:
     if not saved:
         raise HTTPException(400, "No files received")
 
-    if len(saved) == 1 and (_is_dicom(saved[0]) or saved[0].lower().endswith(".dcm")):
+    dicom_paths = [p for p in saved if _is_dicom(p) or p.lower().endswith(".dcm")]
+    nii_paths   = [p for p in saved if p.lower().endswith((".nii", ".nii.gz"))]
+
+    if len(dicom_paths) == 1 and not nii_paths:
         try:
-            stacked, affine, acq = _load_dicom_4d(saved[0])
+            stacked, affine, acq = _load_dicom_4d(dicom_paths[0])
         except Exception as e:
             raise HTTPException(400, f"DICOM load failed: {e}")
         s.input_type = "dicom"
-        s.file_names = [os.path.basename(saved[0])]
+        s.file_names = [os.path.basename(dicom_paths[0])]
+    elif len(dicom_paths) > 1 and not nii_paths:
+        try:
+            stacked, affine, acq = _load_dicom_series_generic(dicom_paths, s.modality)
+        except Exception as e:
+            raise HTTPException(400, f"DICOM series load failed: {e}")
+        s.input_type = "dicom"
+        s.file_names = sorted([os.path.basename(p) for p in dicom_paths])
     else:
-        nii_paths = [p for p in saved if p.lower().endswith((".nii", ".nii.gz"))]
         if not nii_paths:
-            raise HTTPException(400, "No .nii or .nii.gz files found")
+            raise HTTPException(400, "No .nii, .nii.gz, or .dcm files found")
         try:
             stacked, affine, acq = _load_nifti_folder(nii_paths)
         except Exception as e:
